@@ -1,0 +1,92 @@
+# YAMAMI Japanese Translation
+# Copyright (C) 2024, NIES
+# This file is distributed under the same license as the YAMAMI package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: YAMAMI 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-01-01 00:00+0000\n"
+"PO-Revision-Date: 2024-01-01 00:00+0000\n"
+"Last-Translator: NIES <nies@example.com>\n"
+"Language: ja\n"
+"Language-Team: Japanese\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: ../../index.rst:2
+msgid "YAMAMI Documentation"
+msgstr "YAMAMI ドキュメント"
+
+#: ../../index.rst:4
+msgid "**YAMAMI**: Mountain Phenology Pipeline"
+msgstr "**YAMAMI**: 山岳フェノロジーパイプライン"
+
+#: ../../index.rst:14
+msgid "Getting Started"
+msgstr "はじめに"
+
+#: ../../index.rst:21
+msgid "API Reference"
+msgstr "APIリファレンス"
+
+#: ../../index.rst:27
+msgid "Features"
+msgstr "機能"
+
+#: ../../index.rst:30
+msgid "**Image Ingestion**: Scan and profile image collections with metadata extraction"
+msgstr "**画像取り込み**: 画像コレクションのスキャンとメタデータ抽出によるプロファイリング"
+
+#: ../../index.rst:31
+msgid "**Semantic Segmentation**: Segment sky, cloud, fog, and snow using SAM3"
+msgstr "**セマンティックセグメンテーション**: SAM3を使用した空、雲、霧、雪の領域分割"
+
+#: ../../index.rst:32
+msgid "**Quality Control**: Pre- and post-alignment QC filtering"
+msgstr "**品質管理**: アライメント前後のQCフィルタリング"
+
+#: ../../index.rst:33
+msgid "**Image Alignment**: Camera shift detection and homography-based alignment"
+msgstr "**画像位置合わせ**: カメラシフト検出とホモグラフィベースのアライメント"
+
+#: ../../index.rst:34
+msgid "**AOI Extraction**: Automatic skyline detection and area of interest masking"
+msgstr "**AOI抽出**: 自動スカイライン検出と関心領域マスキング"
+
+#: ../../index.rst:35
+msgid "**Snow Analysis**: Snow detection and pixel-level snowmelt date estimation"
+msgstr "**積雪解析**: 積雪検出とピクセルレベルの融雪日推定"
+
+#: ../../index.rst:36
+msgid "**Phenology Extraction**: Greenness ratio calculation and double-sigmoid fitting"
+msgstr "**フェノロジー抽出**: 緑色度比の計算とダブルシグモイドフィッティング"
+
+#: ../../index.rst:37
+msgid "**Visualization**: Color-coded DOY maps with publication-quality figures"
+msgstr "**可視化**: 出版品質のカラーコード化DOYマップ"
+
+#: ../../index.rst:38
+msgid "**Export**: Structured result export with provenance tracking"
+msgstr "**エクスポート**: 来歴追跡を伴う構造化された結果のエクスポート"
+
+#: ../../index.rst:41
+msgid "Quick Example"
+msgstr "クイックサンプル"
+
+#: ../../index.rst:72
+msgid "Installation"
+msgstr "インストール"
+
+#: ../../index.rst:74
+msgid "Install from PyPI:"
+msgstr "PyPIからインストール:"
+
+#: ../../index.rst:81
+msgid "For development and documentation dependencies, see :doc:`installation`."
+msgstr "開発およびドキュメント用の依存関係については :doc:`installation` を参照してください。"
+
+#: ../../index.rst:85
+msgid "Indices and Tables"
+msgstr "索引とテーブル"

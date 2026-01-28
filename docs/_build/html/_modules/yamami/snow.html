@@ -1,0 +1,526 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.snow &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">yamami.snow</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for yamami.snow</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Snow detection and snowmelt date estimation module.</span>
+
+<span class="sd">This module provides functionality for:</span>
+<span class="sd">- Extracting snow masks from images using threshold-based classification</span>
+<span class="sd">- Detecting high-reflectance rocks to exclude from snow analysis</span>
+<span class="sd">- Estimating pixel-level snowmelt day-of-year</span>
+
+<span class="sd">The snow detection uses RGB sum thresholding with optional Otsu method</span>
+<span class="sd">for automatic threshold determination. Snowmelt DOY is estimated using</span>
+<span class="sd">multi-stage temporal analysis to find when snow disappears for</span>
+<span class="sd">consecutive days.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">yamami.logging</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="snow">
+<a class="viewcode-back" href="../../api/snow.html#yamami.snow.snow">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">snow</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">aoi_mask</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">otsu</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">dict</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Extract snow masks from images using threshold-based classification.</span>
+
+<span class="sd">    Uses RGB sum thresholding to classify pixels as snow or non-snow.</span>
+<span class="sd">    When otsu=True, the threshold is determined automatically using</span>
+<span class="sd">    Otsu&#39;s method on the grayscale (RGB sum) values.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with columns &#39;filepath&#39;, &#39;doy&#39;, and RGB mean values</span>
+<span class="sd">                (&#39;R_mean&#39;, &#39;G_mean&#39;, &#39;B_mean&#39;).</span>
+<span class="sd">        aoi_mask: Binary mask defining the area of interest.</span>
+<span class="sd">                  Shape should match expected image dimensions.</span>
+<span class="sd">        otsu: If True, use Otsu&#39;s method for automatic thresholding.</span>
+<span class="sd">              If False, use a fixed threshold. Default is True.</span>
+<span class="sd">        output_dir: Optional directory to save intermediate results.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (masks, thresholds) where:</span>
+<span class="sd">            - masks: dict mapping DOY (int) to binary snow mask (np.ndarray)</span>
+<span class="sd">            - thresholds: DataFrame with &#39;filepath&#39; and &#39;threshold&#39; columns</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">profile</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Empty profile provided, returning empty results&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{},</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">,</span> <span class="s2">&quot;threshold&quot;</span><span class="p">])</span>
+
+    <span class="n">masks</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">threshold_records</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">filepath</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+        <span class="n">doy</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;doy&quot;</span><span class="p">])</span>
+
+        <span class="c1"># Calculate RGB sum as brightness indicator</span>
+        <span class="n">rgb_sum</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;R_mean&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;G_mean&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;B_mean&quot;</span><span class="p">]</span>
+
+        <span class="c1"># Determine threshold</span>
+        <span class="k">if</span> <span class="n">otsu</span><span class="p">:</span>
+            <span class="n">threshold</span> <span class="o">=</span> <span class="n">_calculate_otsu_threshold</span><span class="p">(</span><span class="n">profile</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Fixed threshold: typical snow has RGB sum &gt; 600</span>
+            <span class="n">threshold</span> <span class="o">=</span> <span class="mf">600.0</span>
+
+        <span class="c1"># Create snow mask based on threshold</span>
+        <span class="c1"># For profile-based analysis, we create a uniform mask</span>
+        <span class="c1"># based on the average brightness of the image</span>
+        <span class="n">snow_mask</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">aoi_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">rgb_sum</span> <span class="o">&gt;=</span> <span class="n">threshold</span><span class="p">:</span>
+            <span class="c1"># Image appears to have significant snow coverage</span>
+            <span class="n">snow_mask</span> <span class="o">=</span> <span class="n">aoi_mask</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Image appears to have little or no snow</span>
+            <span class="n">snow_mask</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">aoi_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+
+        <span class="c1"># Apply AOI mask</span>
+        <span class="n">snow_mask</span> <span class="o">=</span> <span class="n">snow_mask</span> <span class="o">*</span> <span class="n">aoi_mask</span>
+
+        <span class="n">masks</span><span class="p">[</span><span class="n">doy</span><span class="p">]</span> <span class="o">=</span> <span class="n">snow_mask</span>
+        <span class="n">threshold_records</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+            <span class="s2">&quot;filepath&quot;</span><span class="p">:</span> <span class="n">filepath</span><span class="p">,</span>
+            <span class="s2">&quot;threshold&quot;</span><span class="p">:</span> <span class="n">threshold</span><span class="p">,</span>
+        <span class="p">})</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Processed DOY </span><span class="si">{</span><span class="n">doy</span><span class="si">}</span><span class="s2">: RGB sum=</span><span class="si">{</span><span class="n">rgb_sum</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">, &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;threshold=</span><span class="si">{</span><span class="n">threshold</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">, snow_pixels=</span><span class="si">{</span><span class="n">snow_mask</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">thresholds</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">threshold_records</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">output_dir</span><span class="p">:</span>
+        <span class="n">_save_snow_results</span><span class="p">(</span><span class="n">masks</span><span class="p">,</span> <span class="n">thresholds</span><span class="p">,</span> <span class="n">output_dir</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Snow detection completed for </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">masks</span><span class="p">)</span><span class="si">}</span><span class="s2"> images&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">masks</span><span class="p">,</span> <span class="n">thresholds</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_calculate_otsu_threshold</span><span class="p">(</span><span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate Otsu&#39;s threshold from profile RGB values.</span>
+
+<span class="sd">    Uses the RGB sum distribution across all images to find</span>
+<span class="sd">    an optimal threshold that separates snow from non-snow images.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with R_mean, G_mean, B_mean columns.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Optimal threshold value.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">profile</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">600.0</span>  <span class="c1"># Default threshold</span>
+
+    <span class="c1"># Calculate RGB sums for all images</span>
+    <span class="n">rgb_sums</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">profile</span><span class="p">[</span><span class="s2">&quot;R_mean&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">profile</span><span class="p">[</span><span class="s2">&quot;G_mean&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">profile</span><span class="p">[</span><span class="s2">&quot;B_mean&quot;</span><span class="p">]</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">values</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">rgb_sums</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="c1"># Not enough data for Otsu, return default</span>
+        <span class="k">return</span> <span class="mf">600.0</span>
+
+    <span class="c1"># Otsu&#39;s method implementation</span>
+    <span class="c1"># Create histogram</span>
+    <span class="n">min_val</span> <span class="o">=</span> <span class="n">rgb_sums</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
+    <span class="n">max_val</span> <span class="o">=</span> <span class="n">rgb_sums</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">max_val</span> <span class="o">-</span> <span class="n">min_val</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="c1"># No variance, return midpoint</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">min_val</span> <span class="o">+</span> <span class="n">max_val</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span>
+
+    <span class="c1"># Normalize to 0-255 range for histogram</span>
+    <span class="n">normalized</span> <span class="o">=</span> <span class="p">((</span><span class="n">rgb_sums</span> <span class="o">-</span> <span class="n">min_val</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">max_val</span> <span class="o">-</span> <span class="n">min_val</span><span class="p">)</span> <span class="o">*</span> <span class="mi">255</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
+    <span class="n">normalized</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">normalized</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">255</span><span class="p">)</span>
+
+    <span class="c1"># Compute histogram</span>
+    <span class="n">hist</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">histogram</span><span class="p">(</span><span class="n">normalized</span><span class="p">,</span> <span class="n">bins</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span> <span class="nb">range</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">))</span>
+    <span class="n">hist</span> <span class="o">=</span> <span class="n">hist</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+
+    <span class="c1"># Normalize histogram</span>
+    <span class="n">total</span> <span class="o">=</span> <span class="n">hist</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">total</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">600.0</span>
+
+    <span class="n">hist</span> <span class="o">=</span> <span class="n">hist</span> <span class="o">/</span> <span class="n">total</span>
+
+    <span class="c1"># Compute cumulative sums</span>
+    <span class="n">cum_sum</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">hist</span><span class="p">)</span>
+    <span class="n">cum_mean</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">hist</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">256</span><span class="p">))</span>
+
+    <span class="c1"># Global mean</span>
+    <span class="n">global_mean</span> <span class="o">=</span> <span class="n">cum_mean</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># Between-class variance</span>
+    <span class="n">variance</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">256</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">256</span><span class="p">):</span>
+        <span class="n">w0</span> <span class="o">=</span> <span class="n">cum_sum</span><span class="p">[</span><span class="n">t</span><span class="p">]</span>
+        <span class="n">w1</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">w0</span>
+
+        <span class="k">if</span> <span class="n">w0</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">w1</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">continue</span>
+
+        <span class="n">mu0</span> <span class="o">=</span> <span class="n">cum_mean</span><span class="p">[</span><span class="n">t</span><span class="p">]</span> <span class="o">/</span> <span class="n">w0</span> <span class="k">if</span> <span class="n">w0</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="n">mu1</span> <span class="o">=</span> <span class="p">(</span><span class="n">global_mean</span> <span class="o">-</span> <span class="n">cum_mean</span><span class="p">[</span><span class="n">t</span><span class="p">])</span> <span class="o">/</span> <span class="n">w1</span> <span class="k">if</span> <span class="n">w1</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+
+        <span class="n">variance</span><span class="p">[</span><span class="n">t</span><span class="p">]</span> <span class="o">=</span> <span class="n">w0</span> <span class="o">*</span> <span class="n">w1</span> <span class="o">*</span> <span class="p">(</span><span class="n">mu0</span> <span class="o">-</span> <span class="n">mu1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span>
+
+    <span class="c1"># Find optimal threshold</span>
+    <span class="n">optimal_t</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">variance</span><span class="p">)</span>
+
+    <span class="c1"># Convert back to original scale</span>
+    <span class="n">threshold</span> <span class="o">=</span> <span class="n">min_val</span> <span class="o">+</span> <span class="p">(</span><span class="n">optimal_t</span> <span class="o">/</span> <span class="mi">255</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">max_val</span> <span class="o">-</span> <span class="n">min_val</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Otsu threshold calculated: </span><span class="si">{</span><span class="n">threshold</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">threshold</span>
+
+
+<div class="viewcode-block" id="detect_high_reflectance_rock">
+<a class="viewcode-back" href="../../api/snow.html#yamami.snow.detect_high_reflectance_rock">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">detect_high_reflectance_rock</span><span class="p">(</span>
+    <span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">aoi_mask</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Detect high-reflectance rocks to exclude from snow analysis.</span>
+
+<span class="sd">    High-reflectance rocks can be confused with snow because they</span>
+<span class="sd">    also appear bright in RGB images. This function identifies</span>
+<span class="sd">    rock pixels based on their high but stable reflectance pattern.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        image: RGB image as numpy array with shape (H, W, 3).</span>
+<span class="sd">        aoi_mask: Binary mask defining the area of interest.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        np.ndarray: Binary mask of rock pixels (1 = rock, 0 = not rock).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">3</span> <span class="ow">or</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">3</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Image must be RGB with shape (H, W, 3)&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">!=</span> <span class="n">aoi_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Image and AOI mask must have matching dimensions&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Calculate brightness as sum of RGB channels</span>
+    <span class="n">brightness</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+
+    <span class="c1"># High reflectance threshold (normalized)</span>
+    <span class="n">max_possible</span> <span class="o">=</span> <span class="mi">255</span> <span class="o">*</span> <span class="mi">3</span>
+    <span class="n">high_threshold</span> <span class="o">=</span> <span class="mf">0.7</span> <span class="o">*</span> <span class="n">max_possible</span>  <span class="c1"># 70% of maximum brightness</span>
+
+    <span class="c1"># Detect high-reflectance pixels</span>
+    <span class="n">high_reflectance</span> <span class="o">=</span> <span class="n">brightness</span> <span class="o">&gt;=</span> <span class="n">high_threshold</span>
+
+    <span class="c1"># Rock detection heuristics:</span>
+    <span class="c1"># 1. High reflectance</span>
+    <span class="c1"># 2. Low color saturation (rocks are often grayish)</span>
+
+    <span class="c1"># Calculate saturation-like metric (difference between max and min channel)</span>
+    <span class="n">max_channel</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+    <span class="n">min_channel</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span>
+    <span class="n">color_range</span> <span class="o">=</span> <span class="n">max_channel</span> <span class="o">-</span> <span class="n">min_channel</span>
+
+    <span class="c1"># Low saturation indicates rock (gray-ish)</span>
+    <span class="n">low_saturation</span> <span class="o">=</span> <span class="n">color_range</span> <span class="o">&lt;</span> <span class="mi">30</span>  <span class="c1"># Small color range</span>
+
+    <span class="c1"># Combine criteria</span>
+    <span class="n">rock_mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">high_reflectance</span> <span class="o">&amp;</span> <span class="n">low_saturation</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+
+    <span class="c1"># Apply AOI mask</span>
+    <span class="n">rock_mask</span> <span class="o">=</span> <span class="n">rock_mask</span> <span class="o">*</span> <span class="n">aoi_mask</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Detected </span><span class="si">{</span><span class="n">rock_mask</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="si">}</span><span class="s2"> rock pixels&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">rock_mask</span></div>
+
+
+
+<div class="viewcode-block" id="snowmelt">
+<a class="viewcode-back" href="../../api/snow.html#yamami.snow.snowmelt">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">snowmelt</span><span class="p">(</span>
+    <span class="n">snow_masks</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+    <span class="n">aoi_mask</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Estimate pixel-level snowmelt day-of-year.</span>
+
+<span class="sd">    Analyzes temporal series of snow masks to determine when snow</span>
+<span class="sd">    melts at each pixel. Snowmelt is defined as the first date where</span>
+<span class="sd">    snow disappears for consecutive days (to avoid false positives</span>
+<span class="sd">    from temporary cloud cover).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        snow_masks: dict mapping DOY (int) to binary snow mask (np.ndarray).</span>
+<span class="sd">                   Keys should be sorted chronologically.</span>
+<span class="sd">        aoi_mask: Binary mask defining the area of interest.</span>
+<span class="sd">        output_dir: Optional directory to save results.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: Snowmelt results with columns:</span>
+<span class="sd">            - row: Pixel row index</span>
+<span class="sd">            - col: Pixel column index</span>
+<span class="sd">            - doy: Day of year when snow melted</span>
+<span class="sd">            - confidence: Confidence score (0-1)</span>
+<span class="sd">            - status: &#39;melted&#39;, &#39;no_snow&#39;, &#39;persistent_snow&#39;, or &#39;uncertain&#39;</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">snow_masks</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Empty snow masks provided, returning empty results&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;row&quot;</span><span class="p">,</span> <span class="s2">&quot;col&quot;</span><span class="p">,</span> <span class="s2">&quot;doy&quot;</span><span class="p">,</span> <span class="s2">&quot;confidence&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">])</span>
+
+    <span class="c1"># Get sorted DOY list</span>
+    <span class="n">doys</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">snow_masks</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+
+    <span class="c1"># Get mask dimensions from first mask</span>
+    <span class="n">first_mask</span> <span class="o">=</span> <span class="n">snow_masks</span><span class="p">[</span><span class="n">doys</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span>
+    <span class="n">height</span><span class="p">,</span> <span class="n">width</span> <span class="o">=</span> <span class="n">first_mask</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="c1"># Find AOI pixels</span>
+    <span class="n">aoi_rows</span><span class="p">,</span> <span class="n">aoi_cols</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">aoi_mask</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+
+    <span class="n">results</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">row</span><span class="p">,</span> <span class="n">col</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">aoi_rows</span><span class="p">,</span> <span class="n">aoi_cols</span><span class="p">):</span>
+        <span class="c1"># Extract time series for this pixel</span>
+        <span class="n">snow_series</span> <span class="o">=</span> <span class="p">[</span><span class="n">snow_masks</span><span class="p">[</span><span class="n">doy</span><span class="p">][</span><span class="n">row</span><span class="p">,</span> <span class="n">col</span><span class="p">]</span> <span class="k">for</span> <span class="n">doy</span> <span class="ow">in</span> <span class="n">doys</span><span class="p">]</span>
+
+        <span class="c1"># Analyze time series</span>
+        <span class="n">status</span><span class="p">,</span> <span class="n">melt_doy</span><span class="p">,</span> <span class="n">confidence</span> <span class="o">=</span> <span class="n">_analyze_pixel_snowmelt</span><span class="p">(</span>
+            <span class="n">doys</span><span class="p">,</span> <span class="n">snow_series</span>
+        <span class="p">)</span>
+
+        <span class="n">results</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+            <span class="s2">&quot;row&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">,</span>
+            <span class="s2">&quot;col&quot;</span><span class="p">:</span> <span class="n">col</span><span class="p">,</span>
+            <span class="s2">&quot;doy&quot;</span><span class="p">:</span> <span class="n">melt_doy</span><span class="p">,</span>
+            <span class="s2">&quot;confidence&quot;</span><span class="p">:</span> <span class="n">confidence</span><span class="p">,</span>
+            <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="n">status</span><span class="p">,</span>
+        <span class="p">})</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">output_dir</span><span class="p">:</span>
+        <span class="n">_save_snowmelt_results</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">output_dir</span><span class="p">)</span>
+
+    <span class="c1"># Log summary statistics</span>
+    <span class="n">status_counts</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">value_counts</span><span class="p">()</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Snowmelt analysis completed: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="si">}</span><span class="s2"> pixels analyzed&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">status</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">status_counts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  </span><span class="si">{</span><span class="n">status</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> pixels&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_analyze_pixel_snowmelt</span><span class="p">(</span>
+    <span class="n">doys</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>
+    <span class="n">snow_series</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>
+    <span class="n">min_consecutive</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Analyze a single pixel&#39;s snow time series to determine snowmelt date.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        doys: List of DOY values (sorted).</span>
+<span class="sd">        snow_series: List of snow presence values (1=snow, 0=no snow).</span>
+<span class="sd">        min_consecutive: Minimum consecutive snow-free days required.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (status, melt_doy, confidence)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">snow_series</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">snow_series</span><span class="p">)</span>
+
+    <span class="c1"># Check if pixel ever had snow</span>
+    <span class="k">if</span> <span class="n">snow_series</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;no_snow&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="mf">1.0</span>
+
+    <span class="c1"># Check if snow persists throughout</span>
+    <span class="k">if</span> <span class="n">snow_series</span><span class="p">[</span><span class="o">-</span><span class="n">min_consecutive</span><span class="p">:]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">==</span> <span class="n">min_consecutive</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;persistent_snow&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="mf">1.0</span>
+
+    <span class="c1"># Find snowmelt date (first time snow is absent for consecutive days)</span>
+    <span class="n">melt_doy</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">doys</span><span class="p">)):</span>
+        <span class="k">if</span> <span class="n">snow_series</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="c1"># Check if snow stays gone for min_consecutive days</span>
+            <span class="n">remaining</span> <span class="o">=</span> <span class="n">snow_series</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span> <span class="o">+</span> <span class="n">min_consecutive</span><span class="p">]</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">remaining</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">min_consecutive</span> <span class="ow">and</span> <span class="n">remaining</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="c1"># Verify snow doesn&#39;t return significantly later</span>
+                <span class="n">future_snow</span> <span class="o">=</span> <span class="n">snow_series</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="n">min_consecutive</span><span class="p">:]</span>
+                <span class="k">if</span> <span class="n">future_snow</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">melt_doy</span> <span class="o">=</span> <span class="n">doys</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                    <span class="k">break</span>
+
+    <span class="k">if</span> <span class="n">melt_doy</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Snow pattern is uncertain (intermittent)</span>
+        <span class="c1"># Use last transition from snow to no-snow</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">doys</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">snow_series</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="p">(</span><span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">snow_series</span><span class="p">[</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">):</span>
+                <span class="n">melt_doy</span> <span class="o">=</span> <span class="n">doys</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                <span class="k">return</span> <span class="s2">&quot;uncertain&quot;</span><span class="p">,</span> <span class="n">melt_doy</span><span class="p">,</span> <span class="mf">0.5</span>
+
+        <span class="k">return</span> <span class="s2">&quot;uncertain&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="mf">0.0</span>
+
+    <span class="c1"># Calculate confidence based on data quality</span>
+    <span class="c1"># Higher confidence with more data points and clearer transition</span>
+    <span class="n">n_observations</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">doys</span><span class="p">)</span>
+    <span class="n">confidence</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">n_observations</span> <span class="o">/</span> <span class="mi">10</span><span class="p">)</span>  <span class="c1"># Scale with data amount</span>
+
+    <span class="k">return</span> <span class="s2">&quot;melted&quot;</span><span class="p">,</span> <span class="n">melt_doy</span><span class="p">,</span> <span class="n">confidence</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_save_snow_results</span><span class="p">(</span>
+    <span class="n">masks</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+    <span class="n">thresholds</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Save snow detection results to output directory.&quot;&quot;&quot;</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># Save thresholds</span>
+    <span class="n">thresholds</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s2">&quot;snow_thresholds.csv&quot;</span><span class="p">),</span>
+        <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Save masks as numpy arrays</span>
+    <span class="n">masks_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s2">&quot;snow_masks&quot;</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">masks_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">doy</span><span class="p">,</span> <span class="n">mask</span> <span class="ow">in</span> <span class="n">masks</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">masks_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;snow_mask_doy</span><span class="si">{</span><span class="n">doy</span><span class="si">:</span><span class="s2">03d</span><span class="si">}</span><span class="s2">.npy&quot;</span><span class="p">),</span> <span class="n">mask</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Snow results saved to </span><span class="si">{</span><span class="n">output_dir</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_save_snowmelt_results</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Save snowmelt results to output directory.&quot;&quot;&quot;</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="s2">&quot;snowmelt.csv&quot;</span><span class="p">),</span>
+        <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Snowmelt results saved to </span><span class="si">{</span><span class="n">output_dir</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

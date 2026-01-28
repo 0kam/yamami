@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yamami"
+version = "0.1.0"
+description = "YAMAMI: Mountain Phenology Pipeline - A Python library for analyzing time-lapse camera images to extract snowmelt timing and vegetation greenup phenology"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+authors = [
+    { name = "NIES", email = "nies@example.com" }
+]
+keywords = ["phenology", "snowmelt", "greenup", "time-lapse", "mountain", "remote-sensing", "image-analysis"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "opencv-python",
+    "scipy",
+    "pillow",
+    "tqdm",
+    "matplotlib",
+    "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+    "image-matching-models",
+    "torch",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+    "sphinx-intl",
+    "myst-parser",
+]
+
+[project.urls]
+Homepage = "https://github.com/NIES/yamami"
+Documentation = "https://yamami.readthedocs.io"
+Repository = "https://github.com/NIES/yamami"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yamami"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "real_data: tests using real image data from test_data_micro",
+]
+
+[tool.coverage.run]
+source = ["src/yamami"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

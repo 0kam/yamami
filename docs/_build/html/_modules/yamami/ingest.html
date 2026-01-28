@@ -1,0 +1,378 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.ingest &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">yamami.ingest</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for yamami.ingest</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Image ingestion and profiling module for yamami.</span>
+
+<span class="sd">Provides functions for scanning directories for images and computing</span>
+<span class="sd">metadata and luminance statistics.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">cv2</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">PIL</span><span class="w"> </span><span class="kn">import</span> <span class="n">Image</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">PIL.ExifTags</span><span class="w"> </span><span class="kn">import</span> <span class="n">TAGS</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">yamami.parser</span><span class="w"> </span><span class="kn">import</span> <span class="n">parse_filename</span>
+
+
+<span class="c1"># Default patterns for image file detection</span>
+<span class="n">DEFAULT_PATTERNS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;*.jpg&quot;</span><span class="p">,</span> <span class="s2">&quot;*.jpeg&quot;</span><span class="p">,</span> <span class="s2">&quot;*.tif&quot;</span><span class="p">,</span> <span class="s2">&quot;*.tiff&quot;</span><span class="p">]</span>
+
+
+<div class="viewcode-block" id="ingest">
+<a class="viewcode-back" href="../../api/ingest.html#yamami.ingest.ingest">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">ingest</span><span class="p">(</span><span class="n">directory</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">patterns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Scan directory and return DataFrame with image paths.</span>
+
+<span class="sd">    Recursively scans the specified directory for image files matching</span>
+<span class="sd">    the given patterns (default: JPEG and TIFF files).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        directory: Path to the directory to scan.</span>
+<span class="sd">        patterns: List of glob patterns to match (e.g., [&quot;*.jpg&quot;, &quot;*.png&quot;]).</span>
+<span class="sd">                  Defaults to [&quot;*.jpg&quot;, &quot;*.jpeg&quot;, &quot;*.tif&quot;, &quot;*.tiff&quot;].</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: DataFrame with a &#39;path&#39; column containing absolute paths</span>
+<span class="sd">                      to all matching image files.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; index = ingest(&quot;/path/to/images&quot;)</span>
+<span class="sd">        &gt;&gt;&gt; print(index.head())</span>
+<span class="sd">                                                   path</span>
+<span class="sd">        0  /path/to/images/MRD_N_NikL_RGB_20240501_0800.jpg</span>
+<span class="sd">        1  /path/to/images/MRD_N_NikL_RGB_20240501_1200.jpg</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">patterns</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">patterns</span> <span class="o">=</span> <span class="n">DEFAULT_PATTERNS</span>
+
+    <span class="n">directory_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">directory</span><span class="p">)</span>
+    <span class="n">image_paths</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">pattern</span> <span class="ow">in</span> <span class="n">patterns</span><span class="p">:</span>
+        <span class="c1"># Search recursively with case-insensitive matching</span>
+        <span class="c1"># First, search with the pattern as-is</span>
+        <span class="n">image_paths</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">directory_path</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="n">pattern</span><span class="p">))</span>
+
+        <span class="c1"># Also search with uppercase pattern for case-insensitive matching</span>
+        <span class="n">upper_pattern</span> <span class="o">=</span> <span class="n">pattern</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">upper_pattern</span> <span class="o">!=</span> <span class="n">pattern</span><span class="p">:</span>
+            <span class="n">image_paths</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">directory_path</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="n">upper_pattern</span><span class="p">))</span>
+
+    <span class="c1"># Remove duplicates and convert to absolute paths</span>
+    <span class="n">unique_paths</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">resolve</span><span class="p">())</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">image_paths</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="n">unique_paths</span><span class="p">})</span></div>
+
+
+
+<div class="viewcode-block" id="compute_luminance_stats">
+<a class="viewcode-back" href="../../api/ingest.html#yamami.ingest.compute_luminance_stats">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">compute_luminance_stats</span><span class="p">(</span><span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Compute luminance statistics for an image.</span>
+
+<span class="sd">    Converts the image to grayscale (if color) and computes statistical</span>
+<span class="sd">    measures of pixel intensity.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        image: Input image as numpy array. Can be grayscale (H, W) or</span>
+<span class="sd">               color (H, W, C) in BGR or RGB format.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Dictionary containing:</span>
+<span class="sd">            - mean_luma: Mean luminance value (0-255)</span>
+<span class="sd">            - std_luma: Standard deviation of luminance</span>
+<span class="sd">            - p05_luma: 5th percentile luminance</span>
+<span class="sd">            - p50_luma: 50th percentile (median) luminance</span>
+<span class="sd">            - p95_luma: 95th percentile luminance</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; import cv2</span>
+<span class="sd">        &gt;&gt;&gt; img = cv2.imread(&quot;image.jpg&quot;)</span>
+<span class="sd">        &gt;&gt;&gt; stats = compute_luminance_stats(img)</span>
+<span class="sd">        &gt;&gt;&gt; print(f&quot;Mean: {stats[&#39;mean_luma&#39;]:.2f}&quot;)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Convert to grayscale if color image</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">image</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+        <span class="n">gray</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">cvtColor</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">COLOR_BGR2GRAY</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">gray</span> <span class="o">=</span> <span class="n">image</span>
+
+    <span class="c1"># Flatten for statistical computations</span>
+    <span class="n">pixels</span> <span class="o">=</span> <span class="n">gray</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;mean_luma&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">pixels</span><span class="p">)),</span>
+        <span class="s2">&quot;std_luma&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">pixels</span><span class="p">)),</span>
+        <span class="s2">&quot;p05_luma&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">percentile</span><span class="p">(</span><span class="n">pixels</span><span class="p">,</span> <span class="mi">5</span><span class="p">)),</span>
+        <span class="s2">&quot;p50_luma&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">percentile</span><span class="p">(</span><span class="n">pixels</span><span class="p">,</span> <span class="mi">50</span><span class="p">)),</span>
+        <span class="s2">&quot;p95_luma&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">percentile</span><span class="p">(</span><span class="n">pixels</span><span class="p">,</span> <span class="mi">95</span><span class="p">)),</span>
+    <span class="p">}</span></div>
+
+
+
+<div class="viewcode-block" id="extract_exif">
+<a class="viewcode-back" href="../../api/ingest.html#yamami.ingest.extract_exif">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">extract_exif</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Extract EXIF metadata from an image file.</span>
+
+<span class="sd">    Uses Pillow to read EXIF data from the image. Returns an empty</span>
+<span class="sd">    dictionary if the file doesn&#39;t exist, is not a valid image, or</span>
+<span class="sd">    has no EXIF data.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path: Path to the image file.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Dictionary containing EXIF tag names and values.</span>
+<span class="sd">              Returns empty dict if no EXIF data is available.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; exif = extract_exif(&quot;photo.jpg&quot;)</span>
+<span class="sd">        &gt;&gt;&gt; if &quot;DateTimeOriginal&quot; in exif:</span>
+<span class="sd">        ...     print(f&quot;Taken: {exif[&#39;DateTimeOriginal&#39;]}&quot;)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">with</span> <span class="n">Image</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="k">as</span> <span class="n">img</span><span class="p">:</span>
+            <span class="n">exif_data</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">_getexif</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">exif_data</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">{}</span>
+
+            <span class="c1"># Convert numeric EXIF tags to human-readable names</span>
+            <span class="k">return</span> <span class="p">{</span>
+                <span class="n">TAGS</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">tag</span><span class="p">,</span> <span class="n">tag</span><span class="p">):</span> <span class="n">value</span>
+                <span class="k">for</span> <span class="n">tag</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">exif_data</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
+    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+        <span class="c1"># Return empty dict for any errors (file not found, not an image, etc.)</span>
+        <span class="k">return</span> <span class="p">{}</span></div>
+
+
+
+<div class="viewcode-block" id="profile">
+<a class="viewcode-back" href="../../api/ingest.html#yamami.ingest.profile">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">profile</span><span class="p">(</span><span class="n">index</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Profile images and return DataFrame with metadata and statistics.</span>
+
+<span class="sd">    For each image in the index, extracts:</span>
+<span class="sd">    - Filename metadata using parse_filename()</span>
+<span class="sd">    - Image dimensions (width, height)</span>
+<span class="sd">    - File size</span>
+<span class="sd">    - Luminance statistics</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        index: DataFrame with &#39;path&#39; column containing image paths.</span>
+<span class="sd">               Typically the output of ingest().</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: DataFrame with columns:</span>
+<span class="sd">            - path: Absolute path to the image</span>
+<span class="sd">            - filename: Base filename</span>
+<span class="sd">            - site: Site code from filename (or None)</span>
+<span class="sd">            - azimuth: Azimuth from filename (or None)</span>
+<span class="sd">            - camera: Camera identifier from filename (or None)</span>
+<span class="sd">            - band: Image band from filename (or None)</span>
+<span class="sd">            - timestamp: Datetime from filename (or None)</span>
+<span class="sd">            - width: Image width in pixels</span>
+<span class="sd">            - height: Image height in pixels</span>
+<span class="sd">            - filesize: File size in bytes</span>
+<span class="sd">            - mean_luma: Mean luminance (0-255)</span>
+<span class="sd">            - std_luma: Standard deviation of luminance</span>
+<span class="sd">            - p05_luma: 5th percentile luminance</span>
+<span class="sd">            - p50_luma: 50th percentile luminance</span>
+<span class="sd">            - p95_luma: 95th percentile luminance</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; index = ingest(&quot;/path/to/images&quot;)</span>
+<span class="sd">        &gt;&gt;&gt; profiles = profile(index)</span>
+<span class="sd">        &gt;&gt;&gt; print(profiles[[&quot;filename&quot;, &quot;site&quot;, &quot;mean_luma&quot;]])</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">index</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span>
+            <span class="s2">&quot;path&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;filename&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;site&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;azimuth&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;camera&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;band&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;timestamp&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;width&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;height&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;filesize&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;mean_luma&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;std_luma&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;p05_luma&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;p50_luma&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;p95_luma&quot;</span><span class="p">,</span>
+        <span class="p">])</span>
+
+    <span class="n">records</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">index</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;path&quot;</span><span class="p">]</span>
+        <span class="n">filename</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+
+        <span class="c1"># Parse filename for metadata</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="n">parse_filename</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+
+        <span class="c1"># Get file size</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">filesize</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">getsize</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+            <span class="n">filesize</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># Read image and compute stats</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">img</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">img</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">height</span><span class="p">,</span> <span class="n">width</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
+                <span class="n">luma_stats</span> <span class="o">=</span> <span class="n">compute_luminance_stats</span><span class="p">(</span><span class="n">img</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">width</span><span class="p">,</span> <span class="n">height</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+                <span class="n">luma_stats</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="s2">&quot;mean_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                    <span class="s2">&quot;std_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                    <span class="s2">&quot;p05_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                    <span class="s2">&quot;p50_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                    <span class="s2">&quot;p95_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="p">}</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="n">width</span><span class="p">,</span> <span class="n">height</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+            <span class="n">luma_stats</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">&quot;mean_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="s2">&quot;std_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="s2">&quot;p05_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="s2">&quot;p50_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="s2">&quot;p95_luma&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="p">}</span>
+
+        <span class="n">record</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="n">path</span><span class="p">,</span>
+            <span class="s2">&quot;filename&quot;</span><span class="p">:</span> <span class="n">filename</span><span class="p">,</span>
+            <span class="s2">&quot;site&quot;</span><span class="p">:</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;site&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">metadata</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;azimuth&quot;</span><span class="p">:</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;azimuth&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">metadata</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;camera&quot;</span><span class="p">:</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;camera&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">metadata</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;band&quot;</span><span class="p">:</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;band&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">metadata</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;timestamp&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">metadata</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;width&quot;</span><span class="p">:</span> <span class="n">width</span><span class="p">,</span>
+            <span class="s2">&quot;height&quot;</span><span class="p">:</span> <span class="n">height</span><span class="p">,</span>
+            <span class="s2">&quot;filesize&quot;</span><span class="p">:</span> <span class="n">filesize</span><span class="p">,</span>
+            <span class="o">**</span><span class="n">luma_stats</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="n">records</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">record</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">records</span><span class="p">)</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

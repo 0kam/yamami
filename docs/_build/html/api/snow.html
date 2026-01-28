@@ -1,0 +1,238 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.snow &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="yamami.phenology" href="phenology.html" />
+    <link rel="prev" title="yamami.aoi" href="aoi.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">API Reference</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="parser.html">yamami.parser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ingest.html">yamami.ingest</a></li>
+<li class="toctree-l2"><a class="reference internal" href="segment.html">yamami.segment</a></li>
+<li class="toctree-l2"><a class="reference internal" href="qc.html">yamami.qc</a></li>
+<li class="toctree-l2"><a class="reference internal" href="align.html">yamami.align</a></li>
+<li class="toctree-l2"><a class="reference internal" href="aoi.html">yamami.aoi</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">yamami.snow</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.snow.snow"><code class="docutils literal notranslate"><span class="pre">snow()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.snow.detect_high_reflectance_rock"><code class="docutils literal notranslate"><span class="pre">detect_high_reflectance_rock()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.snow.snowmelt"><code class="docutils literal notranslate"><span class="pre">snowmelt()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="phenology.html">yamami.phenology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="viz.html">yamami.viz</a></li>
+<li class="toctree-l2"><a class="reference internal" href="export.html">yamami.export</a></li>
+<li class="toctree-l2"><a class="reference internal" href="logging.html">yamami.logging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="index.html#module-overview">Module Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="index.html#public-api">Public API</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">API Reference</a></li>
+      <li class="breadcrumb-item active">yamami.snow</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/snow.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-yamami.snow">
+<span id="yamami-snow"></span><h1>yamami.snow<a class="headerlink" href="#module-yamami.snow" title="Link to this heading"></a></h1>
+<p>Snow detection and snowmelt date estimation module.</p>
+<p>This module provides functionality for:
+- Extracting snow masks from images using threshold-based classification
+- Detecting high-reflectance rocks to exclude from snow analysis
+- Estimating pixel-level snowmelt day-of-year</p>
+<p>The snow detection uses RGB sum thresholding with optional Otsu method
+for automatic threshold determination. Snowmelt DOY is estimated using
+multi-stage temporal analysis to find when snow disappears for
+consecutive days.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.snow.snow">
+<span class="sig-prename descclassname"><span class="pre">yamami.snow.</span></span><span class="sig-name descname"><span class="pre">snow</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">profile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aoi_mask</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">otsu</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dir</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/snow.html#snow"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.snow.snow" title="Link to this definition"></a></dt>
+<dd><p>Extract snow masks from images using threshold-based classification.</p>
+<p>Uses RGB sum thresholding to classify pixels as snow or non-snow.
+When otsu=True, the threshold is determined automatically using
+Otsu’s method on the grayscale (RGB sum) values.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>profile</strong> (<a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.0)"><em>DataFrame</em></a>) – DataFrame with columns ‘filepath’, ‘doy’, and RGB mean values
+(‘R_mean’, ‘G_mean’, ‘B_mean’).</p></li>
+<li><p><strong>aoi_mask</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Binary mask defining the area of interest.
+Shape should match expected image dimensions.</p></li>
+<li><p><strong>otsu</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><em>bool</em></a>) – If True, use Otsu’s method for automatic thresholding.
+If False, use a fixed threshold. Default is True.</p></li>
+<li><p><strong>output_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em> | </em><em>None</em>) – Optional directory to save intermediate results.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><dl class="simple">
+<dt>(masks, thresholds) where:</dt><dd><ul class="simple">
+<li><p>masks: dict mapping DOY (int) to binary snow mask (np.ndarray)</p></li>
+<li><p>thresholds: DataFrame with ‘filepath’ and ‘threshold’ columns</p></li>
+</ul>
+</dd>
+</dl>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)">tuple</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.snow.detect_high_reflectance_rock">
+<span class="sig-prename descclassname"><span class="pre">yamami.snow.</span></span><span class="sig-name descname"><span class="pre">detect_high_reflectance_rock</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">image</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aoi_mask</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/snow.html#detect_high_reflectance_rock"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.snow.detect_high_reflectance_rock" title="Link to this definition"></a></dt>
+<dd><p>Detect high-reflectance rocks to exclude from snow analysis.</p>
+<p>High-reflectance rocks can be confused with snow because they
+also appear bright in RGB images. This function identifies
+rock pixels based on their high but stable reflectance pattern.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>image</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – RGB image as numpy array with shape (H, W, 3).</p></li>
+<li><p><strong>aoi_mask</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Binary mask defining the area of interest.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Binary mask of rock pixels (1 = rock, 0 = not rock).</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.snow.snowmelt">
+<span class="sig-prename descclassname"><span class="pre">yamami.snow.</span></span><span class="sig-name descname"><span class="pre">snowmelt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">snow_masks</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">aoi_mask</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dir</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/snow.html#snowmelt"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.snow.snowmelt" title="Link to this definition"></a></dt>
+<dd><p>Estimate pixel-level snowmelt day-of-year.</p>
+<p>Analyzes temporal series of snow masks to determine when snow
+melts at each pixel. Snowmelt is defined as the first date where
+snow disappears for consecutive days (to avoid false positives
+from temporary cloud cover).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>snow_masks</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.14)"><em>dict</em></a>) – dict mapping DOY (int) to binary snow mask (np.ndarray).
+Keys should be sorted chronologically.</p></li>
+<li><p><strong>aoi_mask</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Binary mask defining the area of interest.</p></li>
+<li><p><strong>output_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em> | </em><em>None</em>) – Optional directory to save results.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><dl class="simple">
+<dt>Snowmelt results with columns:</dt><dd><ul class="simple">
+<li><p>row: Pixel row index</p></li>
+<li><p>col: Pixel column index</p></li>
+<li><p>doy: Day of year when snow melted</p></li>
+<li><p>confidence: Confidence score (0-1)</p></li>
+<li><p>status: ‘melted’, ‘no_snow’, ‘persistent_snow’, or ‘uncertain’</p></li>
+</ul>
+</dd>
+</dl>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>pd.DataFrame</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="aoi.html" class="btn btn-neutral float-left" title="yamami.aoi" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="phenology.html" class="btn btn-neutral float-right" title="yamami.phenology" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

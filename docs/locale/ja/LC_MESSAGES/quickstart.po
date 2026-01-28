@@ -1,0 +1,136 @@
+# YAMAMI Japanese Translation - Quick Start
+# Copyright (C) 2024, NIES
+# This file is distributed under the same license as the YAMAMI package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: YAMAMI 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-01-01 00:00+0000\n"
+"PO-Revision-Date: 2024-01-01 00:00+0000\n"
+"Last-Translator: NIES <nies@example.com>\n"
+"Language: ja\n"
+"Language-Team: Japanese\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: ../../quickstart.md:1
+msgid "Quick Start Guide"
+msgstr "クイックスタートガイド"
+
+#: ../../quickstart.md:3
+msgid "This guide walks you through a complete YAMAMI workflow from image ingestion to phenology extraction."
+msgstr "このガイドでは、画像取り込みからフェノロジー抽出までの完全なYAMAMIワークフローを説明します。"
+
+#: ../../quickstart.md:6
+msgid "Overview"
+msgstr "概要"
+
+#: ../../quickstart.md:8
+msgid "The YAMAMI pipeline consists of these main stages:"
+msgstr "YAMAMIパイプラインは以下の主要なステージで構成されています:"
+
+#: ../../quickstart.md:10
+msgid "**Ingest**: Scan directory and create image index"
+msgstr "**Ingest**: ディレクトリをスキャンして画像インデックスを作成"
+
+#: ../../quickstart.md:11
+msgid "**Profile**: Extract metadata and compute image statistics"
+msgstr "**Profile**: メタデータの抽出と画像統計の計算"
+
+#: ../../quickstart.md:12
+msgid "**Segment**: Semantic segmentation (sky, cloud, fog, snow)"
+msgstr "**Segment**: セマンティックセグメンテーション（空、雲、霧、雪）"
+
+#: ../../quickstart.md:13
+msgid "**Pre-QC**: Filter images before alignment"
+msgstr "**Pre-QC**: アライメント前の画像フィルタリング"
+
+#: ../../quickstart.md:14
+msgid "**Align**: Detect camera shifts and align images"
+msgstr "**Align**: カメラシフトの検出と画像の位置合わせ"
+
+#: ../../quickstart.md:15
+msgid "**AOI**: Extract area of interest (skyline detection)"
+msgstr "**AOI**: 関心領域の抽出（スカイライン検出）"
+
+#: ../../quickstart.md:16
+msgid "**QC**: Full quality control with AOI consideration"
+msgstr "**QC**: AOIを考慮した完全な品質管理"
+
+#: ../../quickstart.md:17
+msgid "**Snow/Phenology**: Extract environmental metrics"
+msgstr "**Snow/Phenology**: 環境指標の抽出"
+
+#: ../../quickstart.md:18
+msgid "**Viz**: Generate visualizations"
+msgstr "**Viz**: 可視化の生成"
+
+#: ../../quickstart.md:19
+msgid "**Export**: Package results with provenance"
+msgstr "**Export**: 来歴付きで結果をパッケージ化"
+
+#: ../../quickstart.md:21
+msgid "Filename Convention"
+msgstr "ファイル名規則"
+
+#: ../../quickstart.md:23
+msgid "YAMAMI expects images following this naming pattern:"
+msgstr "YAMAMIは以下の命名パターンに従う画像を想定しています:"
+
+#: ../../quickstart.md:35
+msgid "Step-by-Step Workflow"
+msgstr "ステップバイステップのワークフロー"
+
+#: ../../quickstart.md:37
+msgid "Step 1: Ingest Images"
+msgstr "ステップ1: 画像の取り込み"
+
+#: ../../quickstart.md:47
+msgid "Step 2: Profile Images"
+msgstr "ステップ2: 画像のプロファイリング"
+
+#: ../../quickstart.md:58
+msgid "Step 3: Semantic Segmentation"
+msgstr "ステップ3: セマンティックセグメンテーション"
+
+#: ../../quickstart.md:70
+msgid "Step 4: Pre-Alignment QC"
+msgstr "ステップ4: アライメント前QC"
+
+#: ../../quickstart.md:83
+msgid "Step 5: Align Images"
+msgstr "ステップ5: 画像の位置合わせ"
+
+#: ../../quickstart.md:99
+msgid "Step 6: Extract AOI"
+msgstr "ステップ6: AOIの抽出"
+
+#: ../../quickstart.md:112
+msgid "Step 7: Full QC with AOI"
+msgstr "ステップ7: AOIを含む完全QC"
+
+#: ../../quickstart.md:123
+msgid "Step 8a: Snow Analysis"
+msgstr "ステップ8a: 積雪解析"
+
+#: ../../quickstart.md:142
+msgid "Step 8b: Phenology Analysis"
+msgstr "ステップ8b: フェノロジー解析"
+
+#: ../../quickstart.md:153
+msgid "Step 9: Visualization"
+msgstr "ステップ9: 可視化"
+
+#: ../../quickstart.md:173
+msgid "Step 10: Export Results"
+msgstr "ステップ10: 結果のエクスポート"
+
+#: ../../quickstart.md:186
+msgid "Complete Example Script"
+msgstr "完全なサンプルスクリプト"
+
+#: ../../quickstart.md:225
+msgid "Next Steps"
+msgstr "次のステップ"

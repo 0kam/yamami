@@ -1,0 +1,143 @@
+# Installation
+
+## Requirements
+
+YAMAMI requires Python 3.9, 3.10, 3.11, or 3.12.
+
+## Basic Installation
+
+Install the latest stable version from PyPI:
+
+```bash
+pip install yamami
+```
+
+## Installation with Extras
+
+YAMAMI provides optional dependency groups for different use cases:
+
+### Development Dependencies
+
+For testing and development:
+
+```bash
+pip install yamami[dev]
+```
+
+This installs:
+- pytest
+- pytest-cov
+
+### Documentation Dependencies
+
+For building documentation:
+
+```bash
+pip install yamami[docs]
+```
+
+This installs:
+- sphinx
+- sphinx-rtd-theme
+- sphinx-intl
+
+### All Dependencies
+
+Install all optional dependencies:
+
+```bash
+pip install yamami[dev,docs]
+```
+
+## Installation from Source
+
+Clone the repository and install in editable mode:
+
+```bash
+git clone https://github.com/NIES/yamami.git
+cd yamami
+pip install -e .
+```
+
+For development:
+
+```bash
+pip install -e ".[dev,docs]"
+```
+
+## Core Dependencies
+
+YAMAMI depends on the following packages (installed automatically):
+
+| Package | Purpose |
+|---------|---------|
+| numpy | Numerical computing |
+| pandas | Data manipulation |
+| opencv-python | Image processing |
+| scipy | Scientific computing |
+| pillow | Image I/O and EXIF |
+| tqdm | Progress bars |
+| matplotlib | Visualization |
+| segment-anything | SAM3 segmentation |
+| image-matching-models | Feature matching |
+
+## Verifying Installation
+
+Verify YAMAMI is installed correctly:
+
+```python
+import yamami
+print(yamami.__version__)
+```
+
+Run the test suite:
+
+```bash
+pytest tests/
+```
+
+## Platform Notes
+
+### macOS
+
+On Apple Silicon (M1/M2/M3), PyTorch and related packages may need to be
+installed with the MPS backend for GPU acceleration. See PyTorch installation
+documentation for details.
+
+### Linux
+
+For headless servers, ensure a display backend is available for matplotlib:
+
+```python
+import matplotlib
+matplotlib.use('Agg')  # Set non-interactive backend
+```
+
+YAMAMI automatically uses the Agg backend when imported.
+
+### Windows
+
+No special configuration is required for Windows.
+
+## Troubleshooting
+
+### ImportError: No module named 'yamami'
+
+Ensure YAMAMI is installed in the active Python environment:
+
+```bash
+pip show yamami
+```
+
+### OpenCV Installation Issues
+
+If opencv-python fails to install, try:
+
+```bash
+pip install opencv-python-headless
+```
+
+### SAM Model Download
+
+The Segment Anything Model (SAM) checkpoints are downloaded automatically
+on first use. Ensure internet connectivity and sufficient disk space (~2.4 GB).

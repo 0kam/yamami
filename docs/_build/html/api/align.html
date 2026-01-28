@@ -1,0 +1,330 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.align &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="yamami.aoi" href="aoi.html" />
+    <link rel="prev" title="yamami.qc" href="qc.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">API Reference</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="parser.html">yamami.parser</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ingest.html">yamami.ingest</a></li>
+<li class="toctree-l2"><a class="reference internal" href="segment.html">yamami.segment</a></li>
+<li class="toctree-l2"><a class="reference internal" href="qc.html">yamami.qc</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">yamami.align</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.align.align"><code class="docutils literal notranslate"><span class="pre">align()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.align.phase_correlation_change_detect"><code class="docutils literal notranslate"><span class="pre">phase_correlation_change_detect()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.align.segment_timeseries"><code class="docutils literal notranslate"><span class="pre">segment_timeseries()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.align.select_anchor_images"><code class="docutils literal notranslate"><span class="pre">select_anchor_images()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.align.estimate_homography"><code class="docutils literal notranslate"><span class="pre">estimate_homography()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#yamami.align.apply_warp"><code class="docutils literal notranslate"><span class="pre">apply_warp()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="aoi.html">yamami.aoi</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snow.html">yamami.snow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="phenology.html">yamami.phenology</a></li>
+<li class="toctree-l2"><a class="reference internal" href="viz.html">yamami.viz</a></li>
+<li class="toctree-l2"><a class="reference internal" href="export.html">yamami.export</a></li>
+<li class="toctree-l2"><a class="reference internal" href="logging.html">yamami.logging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="index.html#module-overview">Module Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="index.html#public-api">Public API</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">API Reference</a></li>
+      <li class="breadcrumb-item active">yamami.align</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/api/align.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-yamami.align">
+<span id="yamami-align"></span><h1>yamami.align<a class="headerlink" href="#module-yamami.align" title="Link to this heading"></a></h1>
+<p>Image alignment module for yamami.</p>
+<p>Provides functions for detecting camera shifts, segmenting time series
+into stable intervals, and aligning images using feature matching.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.align.align">
+<span class="sig-prename descclassname"><span class="pre">yamami.align.</span></span><span class="sig-name descname"><span class="pre">align</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">profile</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ref</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'roma'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rounds</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_dir</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'cpu'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/align.html#align"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.align.align" title="Link to this definition"></a></dt>
+<dd><p>Detect camera shifts and align images.</p>
+<p>This function detects camera position changes in a time series of images,
+segments the series into stable intervals, and aligns images to a
+reference image using feature matching.</p>
+<dl class="simple">
+<dt>Supported matching methods:</dt><dd><ul class="simple">
+<li><p>OpenCV methods: “akaze”, “sift”</p></li>
+<li><p>IMM methods (requires imm package): “roma”, “loftr”, “sift-lightglue”,
+“superpoint-lightglue”, “minima-superpoint-lightglue”, “tiny-roma”,
+“minima-roma”, “minima-loftr”, “ufm”, “rdd”, “master”</p></li>
+</ul>
+</dd>
+</dl>
+<p>Memory-intensive methods (roma, loftr, etc.) are automatically resized to
+640px unless resize is explicitly specified. LightGlue-based methods can
+handle full-resolution images.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>profile</strong> (<a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.0)"><em>DataFrame</em></a>) – DataFrame with ‘filepath’ and ‘timestamp’ columns.</p></li>
+<li><p><strong>ref</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Path to reference image.</p></li>
+<li><p><strong>method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Matching method to use. Default is “roma”.</p></li>
+<li><p><strong>max_rounds</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a>) – Maximum rounds for iterative alignment. Default is 3.</p></li>
+<li><p><strong>output_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a><em> | </em><em>None</em>) – Directory to save aligned images.</p></li>
+<li><p><strong>device</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><em>str</em></a>) – Device for IMM methods (“cpu” or “cuda”). Default is “cpu”.</p></li>
+<li><p><strong>resize</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><em>int</em></a><em> | </em><em>None</em>) – Resize images to this size for IMM methods.
+None means auto-resize for heavy methods.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><dl class="simple">
+<dt>A tuple containing:</dt><dd><ul class="simple">
+<li><p>segments (pd.DataFrame): DataFrame with segment_id, start_idx, end_idx.</p></li>
+<li><p>warp_params (pd.DataFrame): DataFrame with filepath and warp parameters,
+including match_status and num_matches.</p></li>
+<li><p>aligned_dir (str): Path to directory containing aligned images.</p></li>
+</ul>
+</dd>
+</dl>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)">tuple</a></p>
+</dd>
+</dl>
+<p class="rubric">Example</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">segments</span><span class="p">,</span> <span class="n">warp_params</span><span class="p">,</span> <span class="n">aligned_dir</span> <span class="o">=</span> <span class="n">align</span><span class="p">(</span><span class="n">profile</span><span class="p">,</span> <span class="n">ref</span><span class="o">=</span><span class="s2">&quot;ref.jpg&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">segments</span><span class="o">.</span><span class="n">columns</span>
+<span class="go">Index([&#39;segment_id&#39;, &#39;start_idx&#39;, &#39;end_idx&#39;, &#39;anchor_filepath&#39;])</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Using AKAZE (no external dependencies)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">segments</span><span class="p">,</span> <span class="n">warp_params</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">align</span><span class="p">(</span><span class="n">profile</span><span class="p">,</span> <span class="n">ref</span><span class="o">=</span><span class="s2">&quot;ref.jpg&quot;</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;akaze&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Using roma with GPU</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">segments</span><span class="p">,</span> <span class="n">warp_params</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">align</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">profile</span><span class="p">,</span> <span class="n">ref</span><span class="o">=</span><span class="s2">&quot;ref.jpg&quot;</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;roma&quot;</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span>
+<span class="gp">... </span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.align.phase_correlation_change_detect">
+<span class="sig-prename descclassname"><span class="pre">yamami.align.</span></span><span class="sig-name descname"><span class="pre">phase_correlation_change_detect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">img1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img2</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/align.html#phase_correlation_change_detect"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.align.phase_correlation_change_detect" title="Link to this definition"></a></dt>
+<dd><p>Detect shift between two images using phase correlation.</p>
+<p>Uses FFT-based phase correlation to estimate the translation
+between two images.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>img1</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – First grayscale image.</p></li>
+<li><p><strong>img2</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Second grayscale image (same size as img1).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>(dx, dy) shift in pixels from img1 to img2.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.14)">tuple</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.align.segment_timeseries">
+<span class="sig-prename descclassname"><span class="pre">yamami.align.</span></span><span class="sig-name descname"><span class="pre">segment_timeseries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">shifts</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">5.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/align.html#segment_timeseries"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.align.segment_timeseries" title="Link to this definition"></a></dt>
+<dd><p>Segment time series into stable intervals based on cumulative shifts.</p>
+<p>Detects change points where the cumulative shift exceeds the threshold
+and creates segments representing stable camera positions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>shifts</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Array of shape (N, 2) with (dx, dy) shifts for each frame.</p></li>
+<li><p><strong>threshold</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><em>float</em></a>) – Threshold for detecting a significant shift change.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><dl class="simple">
+<dt>List of segment dictionaries with keys:</dt><dd><ul class="simple">
+<li><p>segment_id: Integer segment identifier.</p></li>
+<li><p>start_idx: Start index in the time series.</p></li>
+<li><p>end_idx: End index in the time series.</p></li>
+</ul>
+</dd>
+</dl>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)">list</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.14)">dict</a>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.align.select_anchor_images">
+<span class="sig-prename descclassname"><span class="pre">yamami.align.</span></span><span class="sig-name descname"><span class="pre">select_anchor_images</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segments</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">profile</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/align.html#select_anchor_images"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.align.select_anchor_images" title="Link to this definition"></a></dt>
+<dd><p>Select the best anchor image for each segment.</p>
+<p>Chooses the image with the best brightness (closest to 0.6) within
+each segment as the anchor for alignment.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>segments</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)"><em>list</em></a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.14)"><em>dict</em></a><em>]</em>) – List of segment dictionaries.</p></li>
+<li><p><strong>profile</strong> (<a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v3.0.0)"><em>DataFrame</em></a>) – DataFrame with ‘filepath’ and optionally ‘brightness’ columns.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><dl class="simple">
+<dt>List of anchor dictionaries with keys:</dt><dd><ul class="simple">
+<li><p>segment_id: Segment identifier.</p></li>
+<li><p>filepath: Path to anchor image.</p></li>
+<li><p>idx: Index in profile.</p></li>
+</ul>
+</dd>
+</dl>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.14)">list</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.14)">dict</a>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.align.estimate_homography">
+<span class="sig-prename descclassname"><span class="pre">yamami.align.</span></span><span class="sig-name descname"><span class="pre">estimate_homography</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src_pts</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dst_pts</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/align.html#estimate_homography"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.align.estimate_homography" title="Link to this definition"></a></dt>
+<dd><p>Estimate homography matrix from matched point pairs.</p>
+<p>Uses RANSAC to robustly estimate the homography transformation.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>src_pts</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Source points array of shape (N, 2).</p></li>
+<li><p><strong>dst_pts</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Destination points array of shape (N, 2).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>3x3 homography matrix, or None if insufficient points.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray or None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="yamami.align.apply_warp">
+<span class="sig-prename descclassname"><span class="pre">yamami.align.</span></span><span class="sig-name descname"><span class="pre">apply_warp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">img</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">H</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/yamami/align.html#apply_warp"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#yamami.align.apply_warp" title="Link to this definition"></a></dt>
+<dd><p>Apply homography transformation to an image.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>img</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – Input image.</p></li>
+<li><p><strong>H</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><em>ndarray</em></a>) – 3x3 homography matrix.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Warped image.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>np.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="qc.html" class="btn btn-neutral float-left" title="yamami.qc" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="aoi.html" class="btn btn-neutral float-right" title="yamami.aoi" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,282 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.aoi &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">yamami.aoi</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for yamami.aoi</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Area of Interest (AOI) extraction module for yamami.</span>
+
+<span class="sd">Provides functions for detecting the skyline and creating AOI masks</span>
+<span class="sd">for phenological analysis of ground vegetation.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">cv2</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">yamami.logging</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="aoi">
+<a class="viewcode-back" href="../../api/aoi.html#yamami.aoi.aoi">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">aoi</span><span class="p">(</span>
+    <span class="n">ref_image</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">output_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Extract skyline and create AOI mask.</span>
+
+<span class="sd">    Detects the skyline using blue channel gradient analysis and creates</span>
+<span class="sd">    a binary mask where the AOI (area below skyline) is marked.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        ref_image: Path to reference image for skyline detection.</span>
+<span class="sd">        output_dir: Optional directory to save skyline and mask files.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: A tuple containing:</span>
+<span class="sd">            - skyline (pd.DataFrame): DataFrame with &#39;x&#39; and &#39;y&#39; columns</span>
+<span class="sd">              defining the skyline curve.</span>
+<span class="sd">            - aoi_mask (np.ndarray): Binary mask (0/255) where 255 indicates</span>
+<span class="sd">              the Area of Interest (below skyline).</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; skyline, aoi_mask = aoi(&quot;ref_image.jpg&quot;, output_dir=&quot;output&quot;)</span>
+<span class="sd">        &gt;&gt;&gt; skyline.columns</span>
+<span class="sd">        Index([&#39;x&#39;, &#39;y&#39;])</span>
+<span class="sd">        &gt;&gt;&gt; np.unique(aoi_mask)</span>
+<span class="sd">        array([  0, 255], dtype=uint8)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Create output directory if specified</span>
+    <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># Read reference image</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">ref_image</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">img</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read reference image: </span><span class="si">{</span><span class="n">ref_image</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Detect skyline</span>
+    <span class="n">skyline</span> <span class="o">=</span> <span class="n">_detect_skyline</span><span class="p">(</span><span class="n">img</span><span class="p">)</span>
+
+    <span class="c1"># Generate AOI mask</span>
+    <span class="n">aoi_mask</span> <span class="o">=</span> <span class="n">_generate_aoi_mask</span><span class="p">(</span><span class="n">skyline</span><span class="p">,</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">])</span>
+
+    <span class="c1"># Save outputs if directory specified</span>
+    <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Save skyline CSV</span>
+        <span class="n">skyline_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span> <span class="o">/</span> <span class="s2">&quot;skyline.csv&quot;</span>
+        <span class="n">skyline</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">skyline_path</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Saved skyline to </span><span class="si">{</span><span class="n">skyline_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Save mask image</span>
+        <span class="n">mask_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span> <span class="o">/</span> <span class="s2">&quot;aoi_mask.png&quot;</span>
+        <span class="n">cv2</span><span class="o">.</span><span class="n">imwrite</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">mask_path</span><span class="p">),</span> <span class="n">aoi_mask</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Saved AOI mask to </span><span class="si">{</span><span class="n">mask_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;AOI extraction complete: skyline has </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">skyline</span><span class="p">)</span><span class="si">}</span><span class="s2"> points, &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;mask shape </span><span class="si">{</span><span class="n">aoi_mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">skyline</span><span class="p">,</span> <span class="n">aoi_mask</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_detect_skyline</span><span class="p">(</span><span class="n">img</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Detect skyline using blue channel gradient analysis.</span>
+
+<span class="sd">    The skyline is detected by finding the maximum vertical gradient</span>
+<span class="sd">    in the blue channel for each column. Sky regions typically have</span>
+<span class="sd">    higher blue values than ground regions.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        img: Input image as numpy array (BGR format).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: DataFrame with &#39;x&#39; and &#39;y&#39; columns defining skyline.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Extract blue channel (OpenCV uses BGR)</span>
+    <span class="n">blue</span> <span class="o">=</span> <span class="n">img</span><span class="p">[:,</span> <span class="p">:,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+    <span class="c1"># Calculate vertical gradient (Sobel)</span>
+    <span class="n">grad_y</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">Sobel</span><span class="p">(</span><span class="n">blue</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">CV_32F</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">ksize</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+    <span class="c1"># For each column, find the row with maximum negative gradient</span>
+    <span class="c1"># (sky to ground transition)</span>
+    <span class="n">height</span><span class="p">,</span> <span class="n">width</span> <span class="o">=</span> <span class="n">blue</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">skyline_y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">width</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">width</span><span class="p">):</span>
+        <span class="n">column_grad</span> <span class="o">=</span> <span class="n">grad_y</span><span class="p">[:,</span> <span class="n">x</span><span class="p">]</span>
+
+        <span class="c1"># Find the row with maximum negative gradient (sky to ground)</span>
+        <span class="c1"># Look in the upper 80% of the image to avoid bottom edges</span>
+        <span class="n">search_range</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">height</span> <span class="o">*</span> <span class="mf">0.8</span><span class="p">)</span>
+
+        <span class="c1"># Find where gradient is most negative (transition from bright to dark)</span>
+        <span class="n">min_grad_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argmin</span><span class="p">(</span><span class="n">column_grad</span><span class="p">[:</span><span class="n">search_range</span><span class="p">])</span>
+
+        <span class="n">skyline_y</span><span class="p">[</span><span class="n">x</span><span class="p">]</span> <span class="o">=</span> <span class="n">min_grad_idx</span>
+
+    <span class="c1"># Smooth the skyline to reduce noise</span>
+    <span class="n">skyline_y</span> <span class="o">=</span> <span class="n">_smooth_skyline</span><span class="p">(</span><span class="n">skyline_y</span><span class="p">,</span> <span class="n">window_size</span><span class="o">=</span><span class="mi">21</span><span class="p">)</span>
+
+    <span class="c1"># Create DataFrame</span>
+    <span class="n">skyline</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">width</span><span class="p">),</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="n">skyline_y</span><span class="p">})</span>
+
+    <span class="k">return</span> <span class="n">skyline</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_smooth_skyline</span><span class="p">(</span><span class="n">skyline_y</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">window_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">21</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Smooth skyline using median filter.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        skyline_y: Array of y-coordinates for skyline.</span>
+<span class="sd">        window_size: Size of median filter window.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        np.ndarray: Smoothed skyline y-coordinates.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Apply median filter</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">scipy.ndimage</span><span class="w"> </span><span class="kn">import</span> <span class="n">median_filter</span>
+
+    <span class="n">smoothed</span> <span class="o">=</span> <span class="n">median_filter</span><span class="p">(</span><span class="n">skyline_y</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">size</span><span class="o">=</span><span class="n">window_size</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">smoothed</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_generate_aoi_mask</span><span class="p">(</span><span class="n">skyline</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">img_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generate binary AOI mask from skyline.</span>
+
+<span class="sd">    Creates a mask where pixels below the skyline (ground/vegetation)</span>
+<span class="sd">    are marked as 255 (AOI) and pixels above (sky) are marked as 0.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        skyline: DataFrame with &#39;x&#39; and &#39;y&#39; columns.</span>
+<span class="sd">        img_shape: Tuple of (height, width) for output mask.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        np.ndarray: Binary mask (0/255) with dtype uint8.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">height</span><span class="p">,</span> <span class="n">width</span> <span class="o">=</span> <span class="n">img_shape</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+
+    <span class="c1"># Fill below skyline</span>
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">skyline</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;x&quot;</span><span class="p">])</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;y&quot;</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">x</span> <span class="o">&lt;</span> <span class="n">width</span> <span class="ow">and</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">y</span> <span class="o">&lt;</span> <span class="n">height</span><span class="p">:</span>
+            <span class="c1"># Mark everything below skyline as AOI</span>
+            <span class="n">mask</span><span class="p">[</span><span class="n">y</span><span class="p">:,</span> <span class="n">x</span><span class="p">]</span> <span class="o">=</span> <span class="mi">255</span>
+
+    <span class="k">return</span> <span class="n">mask</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,913 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.align &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">yamami.align</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for yamami.align</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Image alignment module for yamami.</span>
+
+<span class="sd">Provides functions for detecting camera shifts, segmenting time series</span>
+<span class="sd">into stable intervals, and aligning images using feature matching.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">cv2</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">yamami.logging</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="c1"># List of methods that require the imm package</span>
+<span class="n">IMM_METHODS</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">&quot;sift-lightglue&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;superpoint-lightglue&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;minima-superpoint-lightglue&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;roma&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;tiny-roma&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;minima-roma&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;loftr&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;minima-loftr&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;ufm&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;rdd&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;master&quot;</span><span class="p">,</span>
+<span class="p">]</span>
+
+<span class="c1"># Lightweight methods (LightGlue-based) that can handle full-resolution images</span>
+<span class="n">_LIGHTGLUE_METHODS</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">&quot;sift-lightglue&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;superpoint-lightglue&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;minima-superpoint-lightglue&quot;</span><span class="p">,</span>
+<span class="p">]</span>
+
+<span class="c1"># Default resize for memory-intensive methods</span>
+<span class="n">_DEFAULT_RESIZE_HEAVY</span> <span class="o">=</span> <span class="mi">640</span>
+
+<span class="c1"># Default Lowe&#39;s ratio test threshold</span>
+<span class="n">_DEFAULT_LOWE_RATIO</span> <span class="o">=</span> <span class="mf">0.7</span>
+
+
+<div class="viewcode-block" id="align">
+<a class="viewcode-back" href="../../api/align.html#yamami.align.align">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">align</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">ref</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;roma&quot;</span><span class="p">,</span>
+    <span class="n">max_rounds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+    <span class="n">resize</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Detect camera shifts and align images.</span>
+
+<span class="sd">    This function detects camera position changes in a time series of images,</span>
+<span class="sd">    segments the series into stable intervals, and aligns images to a</span>
+<span class="sd">    reference image using feature matching.</span>
+
+<span class="sd">    Supported matching methods:</span>
+<span class="sd">        - OpenCV methods: &quot;akaze&quot;, &quot;sift&quot;</span>
+<span class="sd">        - IMM methods (requires imm package): &quot;roma&quot;, &quot;loftr&quot;, &quot;sift-lightglue&quot;,</span>
+<span class="sd">          &quot;superpoint-lightglue&quot;, &quot;minima-superpoint-lightglue&quot;, &quot;tiny-roma&quot;,</span>
+<span class="sd">          &quot;minima-roma&quot;, &quot;minima-loftr&quot;, &quot;ufm&quot;, &quot;rdd&quot;, &quot;master&quot;</span>
+
+<span class="sd">    Memory-intensive methods (roma, loftr, etc.) are automatically resized to</span>
+<span class="sd">    640px unless resize is explicitly specified. LightGlue-based methods can</span>
+<span class="sd">    handle full-resolution images.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; and &#39;timestamp&#39; columns.</span>
+<span class="sd">        ref: Path to reference image.</span>
+<span class="sd">        method: Matching method to use. Default is &quot;roma&quot;.</span>
+<span class="sd">        max_rounds: Maximum rounds for iterative alignment. Default is 3.</span>
+<span class="sd">        output_dir: Directory to save aligned images.</span>
+<span class="sd">        device: Device for IMM methods (&quot;cpu&quot; or &quot;cuda&quot;). Default is &quot;cpu&quot;.</span>
+<span class="sd">        resize: Resize images to this size for IMM methods.</span>
+<span class="sd">            None means auto-resize for heavy methods.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: A tuple containing:</span>
+<span class="sd">            - segments (pd.DataFrame): DataFrame with segment_id, start_idx, end_idx.</span>
+<span class="sd">            - warp_params (pd.DataFrame): DataFrame with filepath and warp parameters,</span>
+<span class="sd">              including match_status and num_matches.</span>
+<span class="sd">            - aligned_dir (str): Path to directory containing aligned images.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; segments, warp_params, aligned_dir = align(profile, ref=&quot;ref.jpg&quot;)</span>
+<span class="sd">        &gt;&gt;&gt; segments.columns</span>
+<span class="sd">        Index([&#39;segment_id&#39;, &#39;start_idx&#39;, &#39;end_idx&#39;, &#39;anchor_filepath&#39;])</span>
+
+<span class="sd">        &gt;&gt;&gt; # Using AKAZE (no external dependencies)</span>
+<span class="sd">        &gt;&gt;&gt; segments, warp_params, _ = align(profile, ref=&quot;ref.jpg&quot;, method=&quot;akaze&quot;)</span>
+
+<span class="sd">        &gt;&gt;&gt; # Using roma with GPU</span>
+<span class="sd">        &gt;&gt;&gt; segments, warp_params, _ = align(</span>
+<span class="sd">        ...     profile, ref=&quot;ref.jpg&quot;, method=&quot;roma&quot;, device=&quot;cuda&quot;</span>
+<span class="sd">        ... )</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Create output directory</span>
+    <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">output_dir</span> <span class="o">=</span> <span class="s2">&quot;aligned&quot;</span>
+    <span class="n">aligned_dir</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span><span class="o">.</span><span class="n">absolute</span><span class="p">())</span>
+    <span class="n">Path</span><span class="p">(</span><span class="n">aligned_dir</span><span class="p">)</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># Step 1: Detect shifts using phase correlation</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detecting camera shifts...&quot;</span><span class="p">)</span>
+    <span class="n">shifts</span> <span class="o">=</span> <span class="n">_detect_all_shifts</span><span class="p">(</span><span class="n">profile</span><span class="p">,</span> <span class="n">ref</span><span class="p">)</span>
+
+    <span class="c1"># Step 2: Segment time series</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Segmenting time series...&quot;</span><span class="p">)</span>
+    <span class="n">segments_list</span> <span class="o">=</span> <span class="n">segment_timeseries</span><span class="p">(</span><span class="n">shifts</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
+
+    <span class="c1"># Step 3: Select anchor images</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Selecting anchor images...&quot;</span><span class="p">)</span>
+    <span class="n">anchors</span> <span class="o">=</span> <span class="n">select_anchor_images</span><span class="p">(</span><span class="n">segments_list</span><span class="p">,</span> <span class="n">profile</span><span class="p">)</span>
+
+    <span class="c1"># Step 4: Match anchors to reference and compute homographies</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Matching to reference using </span><span class="si">{</span><span class="n">method</span><span class="si">}</span><span class="s2"> method...&quot;</span><span class="p">)</span>
+    <span class="n">warp_data</span> <span class="o">=</span> <span class="n">_match_all_to_reference</span><span class="p">(</span>
+        <span class="n">profile</span><span class="p">,</span> <span class="n">ref</span><span class="p">,</span> <span class="n">anchors</span><span class="p">,</span> <span class="n">method</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">resize</span><span class="o">=</span><span class="n">resize</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Step 5: Apply warps and save aligned images</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Applying warps...&quot;</span><span class="p">)</span>
+    <span class="n">_apply_and_save_warps</span><span class="p">(</span><span class="n">profile</span><span class="p">,</span> <span class="n">warp_data</span><span class="p">,</span> <span class="n">aligned_dir</span><span class="p">)</span>
+
+    <span class="c1"># Build result DataFrames</span>
+    <span class="n">segments</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">segments_list</span><span class="p">)</span>
+    <span class="n">warp_params</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">warp_data</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;Alignment complete: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">segments</span><span class="p">)</span><span class="si">}</span><span class="s2"> segments, &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">warp_params</span><span class="p">)</span><span class="si">}</span><span class="s2"> images aligned&quot;</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">segments</span><span class="p">,</span> <span class="n">warp_params</span><span class="p">,</span> <span class="n">aligned_dir</span></div>
+
+
+
+<div class="viewcode-block" id="phase_correlation_change_detect">
+<a class="viewcode-back" href="../../api/align.html#yamami.align.phase_correlation_change_detect">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">phase_correlation_change_detect</span><span class="p">(</span>
+    <span class="n">img1</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">img2</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Detect shift between two images using phase correlation.</span>
+
+<span class="sd">    Uses FFT-based phase correlation to estimate the translation</span>
+<span class="sd">    between two images.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        img1: First grayscale image.</span>
+<span class="sd">        img2: Second grayscale image (same size as img1).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (dx, dy) shift in pixels from img1 to img2.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Ensure images are float32</span>
+    <span class="n">img1_float</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="n">img1</span><span class="p">)</span>
+    <span class="n">img2_float</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="n">img2</span><span class="p">)</span>
+
+    <span class="c1"># Compute phase correlation</span>
+    <span class="n">shift</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">phaseCorrelate</span><span class="p">(</span><span class="n">img1_float</span><span class="p">,</span> <span class="n">img2_float</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="p">(</span><span class="n">shift</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">shift</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span></div>
+
+
+
+<div class="viewcode-block" id="segment_timeseries">
+<a class="viewcode-back" href="../../api/align.html#yamami.align.segment_timeseries">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">segment_timeseries</span><span class="p">(</span>
+    <span class="n">shifts</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">5.0</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Segment time series into stable intervals based on cumulative shifts.</span>
+
+<span class="sd">    Detects change points where the cumulative shift exceeds the threshold</span>
+<span class="sd">    and creates segments representing stable camera positions.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        shifts: Array of shape (N, 2) with (dx, dy) shifts for each frame.</span>
+<span class="sd">        threshold: Threshold for detecting a significant shift change.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list[dict]: List of segment dictionaries with keys:</span>
+<span class="sd">            - segment_id: Integer segment identifier.</span>
+<span class="sd">            - start_idx: Start index in the time series.</span>
+<span class="sd">            - end_idx: End index in the time series.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">shifts</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">[]</span>
+
+    <span class="n">segments</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">current_start</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">segment_id</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="c1"># Calculate cumulative shifts</span>
+    <span class="n">cumulative</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">shifts</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+        <span class="c1"># Check if shift from segment start exceeds threshold</span>
+        <span class="n">shift_magnitude</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span>
+            <span class="p">(</span><span class="n">cumulative</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">cumulative</span><span class="p">[</span><span class="n">current_start</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span> <span class="o">**</span> <span class="mi">2</span>
+            <span class="o">+</span> <span class="p">(</span><span class="n">cumulative</span><span class="p">[</span><span class="n">i</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">cumulative</span><span class="p">[</span><span class="n">current_start</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span> <span class="o">**</span> <span class="mi">2</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">shift_magnitude</span> <span class="o">&gt;</span> <span class="n">threshold</span><span class="p">:</span>
+            <span class="c1"># End current segment</span>
+            <span class="n">segments</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="p">{</span>
+                    <span class="s2">&quot;segment_id&quot;</span><span class="p">:</span> <span class="n">segment_id</span><span class="p">,</span>
+                    <span class="s2">&quot;start_idx&quot;</span><span class="p">:</span> <span class="n">current_start</span><span class="p">,</span>
+                    <span class="s2">&quot;end_idx&quot;</span><span class="p">:</span> <span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
+                <span class="p">}</span>
+            <span class="p">)</span>
+            <span class="n">segment_id</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="n">current_start</span> <span class="o">=</span> <span class="n">i</span>
+
+    <span class="c1"># Add final segment</span>
+    <span class="n">segments</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;segment_id&quot;</span><span class="p">:</span> <span class="n">segment_id</span><span class="p">,</span>
+            <span class="s2">&quot;start_idx&quot;</span><span class="p">:</span> <span class="n">current_start</span><span class="p">,</span>
+            <span class="s2">&quot;end_idx&quot;</span><span class="p">:</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">segments</span></div>
+
+
+
+<div class="viewcode-block" id="select_anchor_images">
+<a class="viewcode-back" href="../../api/align.html#yamami.align.select_anchor_images">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">select_anchor_images</span><span class="p">(</span>
+    <span class="n">segments</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Select the best anchor image for each segment.</span>
+
+<span class="sd">    Chooses the image with the best brightness (closest to 0.6) within</span>
+<span class="sd">    each segment as the anchor for alignment.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        segments: List of segment dictionaries.</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; and optionally &#39;brightness&#39; columns.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list[dict]: List of anchor dictionaries with keys:</span>
+<span class="sd">            - segment_id: Segment identifier.</span>
+<span class="sd">            - filepath: Path to anchor image.</span>
+<span class="sd">            - idx: Index in profile.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">anchors</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">seg</span> <span class="ow">in</span> <span class="n">segments</span><span class="p">:</span>
+        <span class="n">start_idx</span> <span class="o">=</span> <span class="n">seg</span><span class="p">[</span><span class="s2">&quot;start_idx&quot;</span><span class="p">]</span>
+        <span class="n">end_idx</span> <span class="o">=</span> <span class="n">seg</span><span class="p">[</span><span class="s2">&quot;end_idx&quot;</span><span class="p">]</span>
+
+        <span class="c1"># Get images in this segment</span>
+        <span class="n">segment_profile</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">start_idx</span> <span class="p">:</span> <span class="n">end_idx</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="s2">&quot;brightness&quot;</span> <span class="ow">in</span> <span class="n">segment_profile</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="c1"># Select image with brightness closest to 0.6 (optimal)</span>
+            <span class="n">target_brightness</span> <span class="o">=</span> <span class="mf">0.6</span>
+            <span class="n">brightness_diff</span> <span class="o">=</span> <span class="p">(</span><span class="n">segment_profile</span><span class="p">[</span><span class="s2">&quot;brightness&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">target_brightness</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span>
+            <span class="n">best_idx</span> <span class="o">=</span> <span class="n">brightness_diff</span><span class="o">.</span><span class="n">idxmin</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Default to middle image</span>
+            <span class="n">best_idx</span> <span class="o">=</span> <span class="n">segment_profile</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">segment_profile</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span><span class="p">]</span>
+
+        <span class="n">anchors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;segment_id&quot;</span><span class="p">:</span> <span class="n">seg</span><span class="p">[</span><span class="s2">&quot;segment_id&quot;</span><span class="p">],</span>
+                <span class="s2">&quot;filepath&quot;</span><span class="p">:</span> <span class="n">profile</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">best_idx</span><span class="p">,</span> <span class="s2">&quot;filepath&quot;</span><span class="p">],</span>
+                <span class="s2">&quot;idx&quot;</span><span class="p">:</span> <span class="n">best_idx</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">anchors</span></div>
+
+
+
+<div class="viewcode-block" id="estimate_homography">
+<a class="viewcode-back" href="../../api/align.html#yamami.align.estimate_homography">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">estimate_homography</span><span class="p">(</span>
+    <span class="n">src_pts</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">dst_pts</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Estimate homography matrix from matched point pairs.</span>
+
+<span class="sd">    Uses RANSAC to robustly estimate the homography transformation.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        src_pts: Source points array of shape (N, 2).</span>
+<span class="sd">        dst_pts: Destination points array of shape (N, 2).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        np.ndarray or None: 3x3 homography matrix, or None if insufficient points.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">src_pts</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">4</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">dst_pts</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">4</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">H</span><span class="p">,</span> <span class="n">mask</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">findHomography</span><span class="p">(</span><span class="n">src_pts</span><span class="p">,</span> <span class="n">dst_pts</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">RANSAC</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">H</span></div>
+
+
+
+<div class="viewcode-block" id="apply_warp">
+<a class="viewcode-back" href="../../api/align.html#yamami.align.apply_warp">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">apply_warp</span><span class="p">(</span><span class="n">img</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">H</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Apply homography transformation to an image.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        img: Input image.</span>
+<span class="sd">        H: 3x3 homography matrix.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        np.ndarray: Warped image.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">h</span><span class="p">,</span> <span class="n">w</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
+    <span class="n">warped</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">warpPerspective</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="p">(</span><span class="n">w</span><span class="p">,</span> <span class="n">h</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">warped</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_detect_all_shifts</span><span class="p">(</span><span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">ref</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Detect shifts for all images relative to adjacent frames.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; column.</span>
+<span class="sd">        ref: Reference image path.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        np.ndarray: Array of shape (N, 2) with shifts.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">profile</span><span class="p">)</span>
+    <span class="n">shifts</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+
+    <span class="c1"># Load reference image</span>
+    <span class="n">ref_img</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">ref</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">IMREAD_GRAYSCALE</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">ref_img</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read reference image: </span><span class="si">{</span><span class="n">ref</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">shifts</span>
+
+    <span class="n">prev_gray</span> <span class="o">=</span> <span class="n">ref_img</span>
+
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">profile</span><span class="o">.</span><span class="n">iterrows</span><span class="p">()):</span>
+        <span class="n">filepath</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+        <span class="n">curr_gray</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">filepath</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">IMREAD_GRAYSCALE</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">curr_gray</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read image: </span><span class="si">{</span><span class="n">filepath</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">continue</span>
+
+        <span class="c1"># Resize if needed</span>
+        <span class="k">if</span> <span class="n">curr_gray</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">prev_gray</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+            <span class="n">curr_gray</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">resize</span><span class="p">(</span><span class="n">curr_gray</span><span class="p">,</span> <span class="p">(</span><span class="n">prev_gray</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">prev_gray</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">dx</span><span class="p">,</span> <span class="n">dy</span> <span class="o">=</span> <span class="n">phase_correlation_change_detect</span><span class="p">(</span><span class="n">prev_gray</span><span class="p">,</span> <span class="n">curr_gray</span><span class="p">)</span>
+            <span class="n">shifts</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">dx</span><span class="p">,</span> <span class="n">dy</span><span class="p">]</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Phase correlation failed for </span><span class="si">{</span><span class="n">filepath</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">prev_gray</span> <span class="o">=</span> <span class="n">curr_gray</span>
+
+    <span class="k">return</span> <span class="n">shifts</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_opencv_match</span><span class="p">(</span>
+    <span class="n">img1</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">img2</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">detector_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;akaze&quot;</span><span class="p">,</span>
+    <span class="n">ratio</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">_DEFAULT_LOWE_RATIO</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    OpenCV feature matching using AKAZE or SIFT.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        img1: First image (BGR).</span>
+<span class="sd">        img2: Second image (BGR).</span>
+<span class="sd">        detector_type: Feature detector type: &quot;akaze&quot; or &quot;sift&quot;.</span>
+<span class="sd">        ratio: Lowe&#39;s ratio test threshold.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (pts1, pts2) matched point pairs, shape (N, 2).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">detector_type</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;akaze&quot;</span><span class="p">:</span>
+        <span class="n">detector</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">AKAZE_create</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">detector_type</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;sift&quot;</span><span class="p">:</span>
+        <span class="n">detector</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">SIFT_create</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown detector_type: </span><span class="si">{</span><span class="n">detector_type</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">kp1</span><span class="p">,</span> <span class="n">des1</span> <span class="o">=</span> <span class="n">detector</span><span class="o">.</span><span class="n">detectAndCompute</span><span class="p">(</span><span class="n">img1</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">kp2</span><span class="p">,</span> <span class="n">des2</span> <span class="o">=</span> <span class="n">detector</span><span class="o">.</span><span class="n">detectAndCompute</span><span class="p">(</span><span class="n">img2</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">des1</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">des2</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">kp1</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">kp2</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="n">bf</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">BFMatcher</span><span class="p">()</span>
+    <span class="n">matches</span> <span class="o">=</span> <span class="n">bf</span><span class="o">.</span><span class="n">knnMatch</span><span class="p">(</span><span class="n">des1</span><span class="p">,</span> <span class="n">des2</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+    <span class="c1"># Lowe&#39;s ratio test</span>
+    <span class="n">good</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">match_pair</span> <span class="ow">in</span> <span class="n">matches</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">match_pair</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">m</span><span class="p">,</span> <span class="n">n</span> <span class="o">=</span> <span class="n">match_pair</span>
+            <span class="k">if</span> <span class="n">m</span><span class="o">.</span><span class="n">distance</span> <span class="o">&lt;</span> <span class="n">ratio</span> <span class="o">*</span> <span class="n">n</span><span class="o">.</span><span class="n">distance</span><span class="p">:</span>
+                <span class="n">good</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">m</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">good</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="n">pts1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">([</span><span class="n">kp1</span><span class="p">[</span><span class="n">m</span><span class="o">.</span><span class="n">queryIdx</span><span class="p">]</span><span class="o">.</span><span class="n">pt</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">good</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">)</span>
+    <span class="n">pts2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">([</span><span class="n">kp2</span><span class="p">[</span><span class="n">m</span><span class="o">.</span><span class="n">trainIdx</span><span class="p">]</span><span class="o">.</span><span class="n">pt</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">good</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">pts1</span><span class="p">,</span> <span class="n">pts2</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_imm_match</span><span class="p">(</span>
+    <span class="n">path1</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">path2</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">method</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+    <span class="n">resize</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Feature matching using imm (image-matching-models) package.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path1: Path to first image.</span>
+<span class="sd">        path2: Path to second image.</span>
+<span class="sd">        method: IMM matching method name (e.g., &quot;roma&quot;, &quot;loftr&quot;, &quot;sift-lightglue&quot;).</span>
+<span class="sd">        device: Device for computation (&quot;cpu&quot; or &quot;cuda&quot;).</span>
+<span class="sd">        resize: Resize images to this size (optional).</span>
+<span class="sd">        **kwargs: Additional arguments for imm&#39;s get_matcher.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (pts1, pts2) matched point pairs, shape (N, 2).</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ImportError: If imm package is not installed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">imm</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_matcher</span>
+    <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Method &#39;</span><span class="si">{</span><span class="n">method</span><span class="si">}</span><span class="s2">&#39; requires the &#39;imm&#39; package. &quot;</span>
+            <span class="s2">&quot;Install with: pip install image-matching-models&quot;</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Get original image sizes for coordinate scaling</span>
+    <span class="n">img1_cv</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">path1</span><span class="p">)</span>
+    <span class="n">img2_cv</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">path2</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">img1_cv</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read image: </span><span class="si">{</span><span class="n">path1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">img2_cv</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read image: </span><span class="si">{</span><span class="n">path2</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">h1_org</span><span class="p">,</span> <span class="n">w1_org</span> <span class="o">=</span> <span class="n">img1_cv</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
+    <span class="n">h2_org</span><span class="p">,</span> <span class="n">w2_org</span> <span class="o">=</span> <span class="n">img2_cv</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
+
+    <span class="c1"># Suppress torchvision deprecation warnings about &#39;pretrained&#39; parameter</span>
+    <span class="k">with</span> <span class="n">warnings</span><span class="o">.</span><span class="n">catch_warnings</span><span class="p">():</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">filterwarnings</span><span class="p">(</span><span class="s2">&quot;ignore&quot;</span><span class="p">,</span> <span class="n">category</span><span class="o">=</span><span class="ne">UserWarning</span><span class="p">,</span> <span class="n">module</span><span class="o">=</span><span class="s2">&quot;torchvision&quot;</span><span class="p">)</span>
+        <span class="n">matcher</span> <span class="o">=</span> <span class="n">get_matcher</span><span class="p">(</span><span class="n">method</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="c1"># Use matcher&#39;s load_image for proper preprocessing</span>
+    <span class="n">img0</span> <span class="o">=</span> <span class="n">matcher</span><span class="o">.</span><span class="n">load_image</span><span class="p">(</span><span class="n">path1</span><span class="p">,</span> <span class="n">resize</span><span class="o">=</span><span class="n">resize</span><span class="p">)</span>
+    <span class="n">img1</span> <span class="o">=</span> <span class="n">matcher</span><span class="o">.</span><span class="n">load_image</span><span class="p">(</span><span class="n">path2</span><span class="p">,</span> <span class="n">resize</span><span class="o">=</span><span class="n">resize</span><span class="p">)</span>
+
+    <span class="c1"># Get the size after loading (to compute scale factors)</span>
+    <span class="c1"># img shape is (C, H, W) or (1, C, H, W)</span>
+    <span class="k">if</span> <span class="n">img0</span><span class="o">.</span><span class="n">dim</span><span class="p">()</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+        <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">h0_loaded</span><span class="p">,</span> <span class="n">w0_loaded</span> <span class="o">=</span> <span class="n">img0</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">h1_loaded</span><span class="p">,</span> <span class="n">w1_loaded</span> <span class="o">=</span> <span class="n">img1</span><span class="o">.</span><span class="n">shape</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">_</span><span class="p">,</span> <span class="n">h0_loaded</span><span class="p">,</span> <span class="n">w0_loaded</span> <span class="o">=</span> <span class="n">img0</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">_</span><span class="p">,</span> <span class="n">h1_loaded</span><span class="p">,</span> <span class="n">w1_loaded</span> <span class="o">=</span> <span class="n">img1</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="n">result</span> <span class="o">=</span> <span class="n">matcher</span><span class="p">(</span><span class="n">img0</span><span class="p">,</span> <span class="n">img1</span><span class="p">)</span>
+    <span class="n">pts1</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;matched_kpts0&quot;</span><span class="p">]</span>
+    <span class="n">pts2</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;matched_kpts1&quot;</span><span class="p">]</span>
+
+    <span class="c1"># Handle both torch tensors and numpy arrays</span>
+    <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">pts1</span><span class="p">,</span> <span class="s2">&quot;cpu&quot;</span><span class="p">):</span>
+        <span class="n">pts1</span> <span class="o">=</span> <span class="n">pts1</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+        <span class="n">pts2</span> <span class="o">=</span> <span class="n">pts2</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">pts1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Scale keypoints back to original image coordinates</span>
+    <span class="n">scale_x0</span> <span class="o">=</span> <span class="n">w1_org</span> <span class="o">/</span> <span class="n">w0_loaded</span>
+    <span class="n">scale_y0</span> <span class="o">=</span> <span class="n">h1_org</span> <span class="o">/</span> <span class="n">h0_loaded</span>
+    <span class="n">scale_x1</span> <span class="o">=</span> <span class="n">w2_org</span> <span class="o">/</span> <span class="n">w1_loaded</span>
+    <span class="n">scale_y1</span> <span class="o">=</span> <span class="n">h2_org</span> <span class="o">/</span> <span class="n">h1_loaded</span>
+
+    <span class="n">pts1</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">*=</span> <span class="n">scale_x0</span>
+    <span class="n">pts1</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">*=</span> <span class="n">scale_y0</span>
+    <span class="n">pts2</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">*=</span> <span class="n">scale_x1</span>
+    <span class="n">pts2</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">*=</span> <span class="n">scale_y1</span>
+
+    <span class="n">pts1</span> <span class="o">=</span> <span class="n">pts1</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">)</span>
+    <span class="n">pts2</span> <span class="o">=</span> <span class="n">pts2</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">pts1</span><span class="p">,</span> <span class="n">pts2</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_match_images</span><span class="p">(</span>
+    <span class="n">path1</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">path2</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;akaze&quot;</span><span class="p">,</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+    <span class="n">resize</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Match two images using specified method.</span>
+
+<span class="sd">    Dispatches to appropriate matching function based on method name.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path1: Path to first image (anchor).</span>
+<span class="sd">        path2: Path to second image (reference).</span>
+<span class="sd">        method: Matching method (&quot;akaze&quot;, &quot;sift&quot;, or IMM methods like &quot;roma&quot;, &quot;loftr&quot;).</span>
+<span class="sd">        device: Device for IMM methods (&quot;cpu&quot; or &quot;cuda&quot;).</span>
+<span class="sd">        resize: Resize for IMM methods.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (pts1, pts2) matched point pairs in original coordinates, shape (N, 2).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">method_lower</span> <span class="o">=</span> <span class="n">method</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">method_lower</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;akaze&quot;</span><span class="p">,</span> <span class="s2">&quot;sift&quot;</span><span class="p">):</span>
+        <span class="c1"># OpenCV-based matching</span>
+        <span class="n">img1</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">path1</span><span class="p">)</span>
+        <span class="n">img2</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">path2</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">img1</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read image: </span><span class="si">{</span><span class="n">path1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="p">(</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">img2</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read image: </span><span class="si">{</span><span class="n">path2</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="p">(</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">_opencv_match</span><span class="p">(</span><span class="n">img1</span><span class="p">,</span> <span class="n">img2</span><span class="p">,</span> <span class="n">detector_type</span><span class="o">=</span><span class="n">method_lower</span><span class="p">)</span>
+
+    <span class="k">elif</span> <span class="n">method_lower</span> <span class="ow">in</span> <span class="p">[</span><span class="n">m</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">IMM_METHODS</span><span class="p">]:</span>
+        <span class="c1"># IMM-based matching</span>
+        <span class="n">effective_resize</span> <span class="o">=</span> <span class="n">resize</span>
+
+        <span class="c1"># Auto-resize for memory-intensive methods (non-LightGlue)</span>
+        <span class="k">if</span> <span class="n">method_lower</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="n">m</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="n">_LIGHTGLUE_METHODS</span><span class="p">]:</span>
+            <span class="k">if</span> <span class="n">resize</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">effective_resize</span> <span class="o">=</span> <span class="n">_DEFAULT_RESIZE_HEAVY</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Method &#39;</span><span class="si">{</span><span class="n">method</span><span class="si">}</span><span class="s2">&#39; is memory-intensive. &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;Resizing images to </span><span class="si">{</span><span class="n">_DEFAULT_RESIZE_HEAVY</span><span class="si">}</span><span class="s2">px.&quot;</span>
+                <span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">_imm_match</span><span class="p">(</span><span class="n">path1</span><span class="p">,</span> <span class="n">path2</span><span class="p">,</span> <span class="n">method</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">resize</span><span class="o">=</span><span class="n">effective_resize</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ImportError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;IMM package not available, falling back to AKAZE: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+            <span class="n">img1</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">path1</span><span class="p">)</span>
+            <span class="n">img2</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">path2</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">img1</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">img2</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">(</span>
+                    <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+                    <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int32&quot;</span><span class="p">),</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="n">_opencv_match</span><span class="p">(</span><span class="n">img1</span><span class="p">,</span> <span class="n">img2</span><span class="p">,</span> <span class="n">detector_type</span><span class="o">=</span><span class="s2">&quot;akaze&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">available</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;akaze&quot;</span><span class="p">,</span> <span class="s2">&quot;sift&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">IMM_METHODS</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown method &#39;</span><span class="si">{</span><span class="n">method</span><span class="si">}</span><span class="s2">&#39;. Available methods: </span><span class="si">{</span><span class="n">available</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_match_all_to_reference</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">ref</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">anchors</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span>
+    <span class="n">method</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+    <span class="n">resize</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Match all images to reference using feature matching.</span>
+
+<span class="sd">    For each segment, matches the anchor image to the reference image to compute</span>
+<span class="sd">    a homography transformation. This transformation is then applied to all images</span>
+<span class="sd">    within that segment.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; column.</span>
+<span class="sd">        ref: Reference image path.</span>
+<span class="sd">        anchors: List of anchor dictionaries with keys:</span>
+<span class="sd">            - segment_id: Segment identifier.</span>
+<span class="sd">            - filepath: Path to anchor image.</span>
+<span class="sd">            - idx: Index in profile.</span>
+<span class="sd">        method: Matching method name (&quot;akaze&quot;, &quot;sift&quot;, or IMM methods).</span>
+<span class="sd">        device: Device for IMM methods (&quot;cpu&quot; or &quot;cuda&quot;).</span>
+<span class="sd">        resize: Resize for IMM methods (None for auto).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        list[dict]: List of warp parameter dictionaries with keys:</span>
+<span class="sd">            - filepath: Image path</span>
+<span class="sd">            - H_00 through H_22: Homography matrix elements</span>
+<span class="sd">            - match_status: &quot;success&quot; or &quot;failed&quot;</span>
+<span class="sd">            - num_matches: Number of matched points (for anchor images)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">warp_data</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="c1"># Build a mapping from segment_id to anchor info and homography</span>
+    <span class="n">segment_homographies</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># First, compute homography for each anchor to reference</span>
+    <span class="k">for</span> <span class="n">anchor</span> <span class="ow">in</span> <span class="n">anchors</span><span class="p">:</span>
+        <span class="n">segment_id</span> <span class="o">=</span> <span class="n">anchor</span><span class="p">[</span><span class="s2">&quot;segment_id&quot;</span><span class="p">]</span>
+        <span class="n">anchor_path</span> <span class="o">=</span> <span class="n">anchor</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Matching anchor </span><span class="si">{</span><span class="n">anchor_path</span><span class="si">}</span><span class="s2"> to reference </span><span class="si">{</span><span class="n">ref</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">pts_anchor</span><span class="p">,</span> <span class="n">pts_ref</span> <span class="o">=</span> <span class="n">_match_images</span><span class="p">(</span>
+                <span class="n">anchor_path</span><span class="p">,</span> <span class="n">ref</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="n">method</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">resize</span><span class="o">=</span><span class="n">resize</span>
+            <span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">pts_anchor</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">4</span><span class="p">:</span>
+                <span class="n">H</span> <span class="o">=</span> <span class="n">estimate_homography</span><span class="p">(</span>
+                    <span class="n">pts_anchor</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">pts_ref</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">H</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">segment_homographies</span><span class="p">[</span><span class="n">segment_id</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                        <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">H</span><span class="p">,</span>
+                        <span class="s2">&quot;num_matches&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">pts_anchor</span><span class="p">),</span>
+                        <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;success&quot;</span><span class="p">,</span>
+                    <span class="p">}</span>
+                    <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;Segment </span><span class="si">{</span><span class="n">segment_id</span><span class="si">}</span><span class="s2">: matched </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">pts_anchor</span><span class="p">)</span><span class="si">}</span><span class="s2"> points&quot;</span>
+                    <span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">segment_homographies</span><span class="p">[</span><span class="n">segment_id</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                        <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+                        <span class="s2">&quot;num_matches&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">pts_anchor</span><span class="p">),</span>
+                        <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+                    <span class="p">}</span>
+                    <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;Segment </span><span class="si">{</span><span class="n">segment_id</span><span class="si">}</span><span class="s2">: homography estimation failed&quot;</span>
+                    <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">segment_homographies</span><span class="p">[</span><span class="n">segment_id</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+                    <span class="s2">&quot;num_matches&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">pts_anchor</span><span class="p">),</span>
+                    <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+                <span class="p">}</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Segment </span><span class="si">{</span><span class="n">segment_id</span><span class="si">}</span><span class="s2">: insufficient matches (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">pts_anchor</span><span class="p">)</span><span class="si">}</span><span class="s2">)&quot;</span>
+                <span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Segment </span><span class="si">{</span><span class="n">segment_id</span><span class="si">}</span><span class="s2">: matching failed: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="n">segment_homographies</span><span class="p">[</span><span class="n">segment_id</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+                <span class="s2">&quot;num_matches&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+                <span class="s2">&quot;status&quot;</span><span class="p">:</span> <span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+            <span class="p">}</span>
+
+    <span class="c1"># Build segment index lookup for each image</span>
+    <span class="c1"># Determine which segment each image belongs to</span>
+    <span class="n">anchor_by_idx</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">&quot;idx&quot;</span><span class="p">]:</span> <span class="n">a</span><span class="p">[</span><span class="s2">&quot;segment_id&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">anchors</span><span class="p">}</span>
+
+    <span class="c1"># Build segment ranges from anchors</span>
+    <span class="c1"># Sort anchors by index</span>
+    <span class="n">sorted_anchors</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">anchors</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="s2">&quot;idx&quot;</span><span class="p">])</span>
+    <span class="n">segment_ranges</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">anchor</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">sorted_anchors</span><span class="p">):</span>
+        <span class="n">start_idx</span> <span class="o">=</span> <span class="n">anchor</span><span class="p">[</span><span class="s2">&quot;idx&quot;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">sorted_anchors</span><span class="p">):</span>
+            <span class="n">end_idx</span> <span class="o">=</span> <span class="n">sorted_anchors</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">][</span><span class="s2">&quot;idx&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">end_idx</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">profile</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="n">segment_ranges</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="p">{</span><span class="s2">&quot;segment_id&quot;</span><span class="p">:</span> <span class="n">anchor</span><span class="p">[</span><span class="s2">&quot;segment_id&quot;</span><span class="p">],</span> <span class="s2">&quot;start&quot;</span><span class="p">:</span> <span class="n">start_idx</span><span class="p">,</span> <span class="s2">&quot;end&quot;</span><span class="p">:</span> <span class="n">end_idx</span><span class="p">}</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Handle images before first anchor</span>
+    <span class="k">if</span> <span class="n">sorted_anchors</span> <span class="ow">and</span> <span class="n">sorted_anchors</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;idx&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">segment_ranges</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span>
+            <span class="mi">0</span><span class="p">,</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;segment_id&quot;</span><span class="p">:</span> <span class="n">sorted_anchors</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;segment_id&quot;</span><span class="p">],</span>
+                <span class="s2">&quot;start&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+                <span class="s2">&quot;end&quot;</span><span class="p">:</span> <span class="n">sorted_anchors</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;idx&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="p">},</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Assign segment_id to each profile row</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_segment_id</span><span class="p">(</span><span class="n">idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">sr</span> <span class="ow">in</span> <span class="n">segment_ranges</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">sr</span><span class="p">[</span><span class="s2">&quot;start&quot;</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">idx</span> <span class="o">&lt;=</span> <span class="n">sr</span><span class="p">[</span><span class="s2">&quot;end&quot;</span><span class="p">]:</span>
+                <span class="k">return</span> <span class="n">sr</span><span class="p">[</span><span class="s2">&quot;segment_id&quot;</span><span class="p">]</span>
+        <span class="c1"># Default to first segment</span>
+        <span class="k">return</span> <span class="n">sorted_anchors</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;segment_id&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">sorted_anchors</span> <span class="k">else</span> <span class="mi">0</span>
+
+    <span class="c1"># Apply homography to all images in each segment</span>
+    <span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">filepath</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+        <span class="n">segment_id</span> <span class="o">=</span> <span class="n">get_segment_id</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">segment_id</span> <span class="ow">in</span> <span class="n">segment_homographies</span><span class="p">:</span>
+            <span class="n">H</span> <span class="o">=</span> <span class="n">segment_homographies</span><span class="p">[</span><span class="n">segment_id</span><span class="p">][</span><span class="s2">&quot;H&quot;</span><span class="p">]</span>
+            <span class="n">status</span> <span class="o">=</span> <span class="n">segment_homographies</span><span class="p">[</span><span class="n">segment_id</span><span class="p">][</span><span class="s2">&quot;status&quot;</span><span class="p">]</span>
+            <span class="n">num_matches</span> <span class="o">=</span> <span class="n">segment_homographies</span><span class="p">[</span><span class="n">segment_id</span><span class="p">][</span><span class="s2">&quot;num_matches&quot;</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">H</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+            <span class="n">status</span> <span class="o">=</span> <span class="s2">&quot;failed&quot;</span>
+            <span class="n">num_matches</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="n">warp_data</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;filepath&quot;</span><span class="p">:</span> <span class="n">filepath</span><span class="p">,</span>
+                <span class="s2">&quot;H_00&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]),</span>
+                <span class="s2">&quot;H_01&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]),</span>
+                <span class="s2">&quot;H_02&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">]),</span>
+                <span class="s2">&quot;H_10&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]),</span>
+                <span class="s2">&quot;H_11&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]),</span>
+                <span class="s2">&quot;H_12&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]),</span>
+                <span class="s2">&quot;H_20&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">]),</span>
+                <span class="s2">&quot;H_21&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]),</span>
+                <span class="s2">&quot;H_22&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">H</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">]),</span>
+                <span class="s2">&quot;segment_id&quot;</span><span class="p">:</span> <span class="n">segment_id</span><span class="p">,</span>
+                <span class="s2">&quot;match_status&quot;</span><span class="p">:</span> <span class="n">status</span><span class="p">,</span>
+                <span class="s2">&quot;num_matches&quot;</span><span class="p">:</span> <span class="n">num_matches</span> <span class="k">if</span> <span class="n">idx</span> <span class="ow">in</span> <span class="n">anchor_by_idx</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">warp_data</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_apply_and_save_warps</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">warp_data</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">],</span> <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Apply warps to images and save to output directory.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; column.</span>
+<span class="sd">        warp_data: List of warp parameter dictionaries.</span>
+<span class="sd">        output_dir: Directory to save aligned images.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">warp_entry</span> <span class="ow">in</span> <span class="n">warp_data</span><span class="p">:</span>
+        <span class="n">filepath</span> <span class="o">=</span> <span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+
+        <span class="c1"># Reconstruct homography matrix</span>
+        <span class="n">H</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="p">[</span><span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_00&quot;</span><span class="p">],</span> <span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_01&quot;</span><span class="p">],</span> <span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_02&quot;</span><span class="p">]],</span>
+                <span class="p">[</span><span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_10&quot;</span><span class="p">],</span> <span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_11&quot;</span><span class="p">],</span> <span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_12&quot;</span><span class="p">]],</span>
+                <span class="p">[</span><span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_20&quot;</span><span class="p">],</span> <span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_21&quot;</span><span class="p">],</span> <span class="n">warp_entry</span><span class="p">[</span><span class="s2">&quot;H_22&quot;</span><span class="p">]],</span>
+            <span class="p">],</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Read image</span>
+        <span class="n">img</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">img</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not read image: </span><span class="si">{</span><span class="n">filepath</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">continue</span>
+
+        <span class="c1"># Apply warp</span>
+        <span class="n">aligned</span> <span class="o">=</span> <span class="n">apply_warp</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">H</span><span class="p">)</span>
+
+        <span class="c1"># Save aligned image</span>
+        <span class="n">output_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span> <span class="o">/</span> <span class="n">Path</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span><span class="o">.</span><span class="n">name</span>
+        <span class="n">cv2</span><span class="o">.</span><span class="n">imwrite</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">output_path</span><span class="p">),</span> <span class="n">aligned</span><span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

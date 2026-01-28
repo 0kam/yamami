@@ -1,0 +1,445 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.segment &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">yamami.segment</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for yamami.segment</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Semantic segmentation module for yamami.</span>
+
+<span class="sd">Provides image segmentation using CLIPSeg model from HuggingFace Transformers</span>
+<span class="sd">with text prompts for semantic labeling of sky, cloud, fog, and snow regions.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">cv2</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">yamami.logging</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="c1"># Default prompts for semantic segmentation</span>
+<span class="n">DEFAULT_PROMPTS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;sky&quot;</span><span class="p">,</span> <span class="s2">&quot;cloud&quot;</span><span class="p">,</span> <span class="s2">&quot;fog&quot;</span><span class="p">,</span> <span class="s2">&quot;snow&quot;</span><span class="p">]</span>
+
+<span class="c1"># Global model cache to avoid reloading</span>
+<span class="n">_model_cache</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{}</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_get_device</span><span class="p">(</span><span class="n">device</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resolve device string to actual device.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        device: Device specification (&quot;auto&quot;, &quot;cpu&quot;, or &quot;cuda&quot;).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        str: Resolved device string (&quot;cpu&quot; or &quot;cuda&quot;).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">device</span> <span class="o">==</span> <span class="s2">&quot;auto&quot;</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+
+            <span class="k">return</span> <span class="s2">&quot;cuda&quot;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="k">else</span> <span class="s2">&quot;cpu&quot;</span>
+        <span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">&quot;cpu&quot;</span>
+    <span class="k">return</span> <span class="n">device</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_load_model</span><span class="p">(</span><span class="n">device</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">tuple</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Load or retrieve cached CLIPSeg model and processor.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        device: Device to load model on (&quot;cpu&quot; or &quot;cuda&quot;).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: (processor, model) or None if loading fails.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">global</span> <span class="n">_model_cache</span>
+
+    <span class="n">cache_key</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;clipseg_</span><span class="si">{</span><span class="n">device</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="k">if</span> <span class="n">cache_key</span> <span class="ow">in</span> <span class="n">_model_cache</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_model_cache</span><span class="p">[</span><span class="n">cache_key</span><span class="p">]</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">from</span><span class="w"> </span><span class="nn">transformers</span><span class="w"> </span><span class="kn">import</span> <span class="n">CLIPSegProcessor</span><span class="p">,</span> <span class="n">CLIPSegForImageSegmentation</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Loading CLIPSeg model on device: </span><span class="si">{</span><span class="n">device</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">processor</span> <span class="o">=</span> <span class="n">CLIPSegProcessor</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="s2">&quot;CIDAS/clipseg-rd64-refined&quot;</span><span class="p">)</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">CLIPSegForImageSegmentation</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="s2">&quot;CIDAS/clipseg-rd64-refined&quot;</span><span class="p">)</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+
+        <span class="n">result</span> <span class="o">=</span> <span class="p">(</span><span class="n">processor</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+        <span class="n">_model_cache</span><span class="p">[</span><span class="n">cache_key</span><span class="p">]</span> <span class="o">=</span> <span class="n">result</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;CLIPSeg model loaded successfully&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">result</span>
+
+    <span class="k">except</span> <span class="ne">ImportError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;transformers not installed: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">. Falling back to stub mode.&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Failed to load CLIPSeg model: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">. Falling back to stub mode.&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_segment_single_image</span><span class="p">(</span>
+    <span class="n">img</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">prompts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+    <span class="n">model_tuple</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">,</span>
+    <span class="n">resize</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Segment a single image using CLIPSeg.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        img: Input image as numpy array (BGR format from cv2).</span>
+<span class="sd">        prompts: List of text prompts for segmentation.</span>
+<span class="sd">        model_tuple: Tuple of (processor, model, device).</span>
+<span class="sd">        resize: Target size for resizing before inference.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: Dictionary mapping prompt names to binary mask arrays.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">PIL</span><span class="w"> </span><span class="kn">import</span> <span class="n">Image</span>
+
+    <span class="n">processor</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">device</span> <span class="o">=</span> <span class="n">model_tuple</span>
+    <span class="n">original_h</span><span class="p">,</span> <span class="n">original_w</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
+
+    <span class="c1"># Convert BGR to RGB for PIL</span>
+    <span class="n">img_rgb</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">cvtColor</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">COLOR_BGR2RGB</span><span class="p">)</span>
+    <span class="n">pil_img</span> <span class="o">=</span> <span class="n">Image</span><span class="o">.</span><span class="n">fromarray</span><span class="p">(</span><span class="n">img_rgb</span><span class="p">)</span>
+
+    <span class="c1"># Resize for inference (maintaining aspect ratio, max dimension = resize)</span>
+    <span class="n">max_dim</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">original_w</span><span class="p">,</span> <span class="n">original_h</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">max_dim</span> <span class="o">&gt;</span> <span class="n">resize</span><span class="p">:</span>
+        <span class="n">scale</span> <span class="o">=</span> <span class="n">resize</span> <span class="o">/</span> <span class="n">max_dim</span>
+        <span class="n">new_w</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">original_w</span> <span class="o">*</span> <span class="n">scale</span><span class="p">)</span>
+        <span class="n">new_h</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">original_h</span> <span class="o">*</span> <span class="n">scale</span><span class="p">)</span>
+        <span class="n">pil_img_resized</span> <span class="o">=</span> <span class="n">pil_img</span><span class="o">.</span><span class="n">resize</span><span class="p">((</span><span class="n">new_w</span><span class="p">,</span> <span class="n">new_h</span><span class="p">),</span> <span class="n">Image</span><span class="o">.</span><span class="n">LANCZOS</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">pil_img_resized</span> <span class="o">=</span> <span class="n">pil_img</span>
+
+    <span class="n">masks_dict</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># Process all prompts at once for efficiency</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">inputs</span> <span class="o">=</span> <span class="n">processor</span><span class="p">(</span>
+            <span class="n">text</span><span class="o">=</span><span class="n">prompts</span><span class="p">,</span>
+            <span class="n">images</span><span class="o">=</span><span class="p">[</span><span class="n">pil_img_resized</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">prompts</span><span class="p">),</span>
+            <span class="n">padding</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">inputs</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">inputs</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+
+        <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">():</span>
+            <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="o">**</span><span class="n">inputs</span><span class="p">)</span>
+
+        <span class="c1"># Get logits and convert to masks</span>
+        <span class="c1"># outputs.logits shape: (batch_size, height, width)</span>
+        <span class="n">logits</span> <span class="o">=</span> <span class="n">outputs</span><span class="o">.</span><span class="n">logits</span>
+
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">prompt</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">prompts</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="c1"># Get mask for this prompt</span>
+                <span class="n">mask_logits</span> <span class="o">=</span> <span class="n">logits</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+
+                <span class="c1"># Apply sigmoid and threshold</span>
+                <span class="n">mask_prob</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">mask_logits</span><span class="p">)</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+
+                <span class="c1"># Use Otsu threshold or fixed threshold</span>
+                <span class="n">mask_binary</span> <span class="o">=</span> <span class="p">(</span><span class="n">mask_prob</span> <span class="o">&gt;</span> <span class="mf">0.5</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span> <span class="o">*</span> <span class="mi">255</span>
+
+                <span class="c1"># Resize mask back to original resolution</span>
+                <span class="k">if</span> <span class="n">mask_binary</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">original_h</span> <span class="ow">or</span> <span class="n">mask_binary</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">original_w</span><span class="p">:</span>
+                    <span class="n">mask_binary</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">resize</span><span class="p">(</span>
+                        <span class="n">mask_binary</span><span class="p">,</span>
+                        <span class="p">(</span><span class="n">original_w</span><span class="p">,</span> <span class="n">original_h</span><span class="p">),</span>
+                        <span class="n">interpolation</span><span class="o">=</span><span class="n">cv2</span><span class="o">.</span><span class="n">INTER_NEAREST</span><span class="p">,</span>
+                    <span class="p">)</span>
+
+                <span class="n">masks_dict</span><span class="p">[</span><span class="n">prompt</span><span class="p">]</span> <span class="o">=</span> <span class="n">mask_binary</span>
+
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Segmentation failed for prompt &#39;</span><span class="si">{</span><span class="n">prompt</span><span class="si">}</span><span class="s2">&#39;: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="n">masks_dict</span><span class="p">[</span><span class="n">prompt</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">original_h</span><span class="p">,</span> <span class="n">original_w</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Batch segmentation failed: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">prompt</span> <span class="ow">in</span> <span class="n">prompts</span><span class="p">:</span>
+            <span class="n">masks_dict</span><span class="p">[</span><span class="n">prompt</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">original_h</span><span class="p">,</span> <span class="n">original_w</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">masks_dict</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_calculate_ratio</span><span class="p">(</span><span class="n">mask</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate the ratio of masked pixels to total pixels.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        mask: Binary mask array (0 or 255).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Ratio of masked area (0.0 to 1.0).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">mask</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">0.0</span>
+    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">mask</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="n">mask</span><span class="o">.</span><span class="n">size</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="segment">
+<a class="viewcode-back" href="../../api/segment.html#yamami.segment.segment">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">segment</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">prompts</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">resize</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">512</span><span class="p">,</span>
+    <span class="n">device</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Run semantic segmentation on images.</span>
+
+<span class="sd">    This function segments images using CLIPSeg with text prompts to identify</span>
+<span class="sd">    semantic regions like sky, cloud, fog, and snow.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; column containing image paths.</span>
+<span class="sd">        prompts: List of text prompts for segmentation. Defaults to</span>
+<span class="sd">            [&quot;sky&quot;, &quot;cloud&quot;, &quot;fog&quot;, &quot;snow&quot;].</span>
+<span class="sd">        resize: Target size for image resizing before segmentation.</span>
+<span class="sd">            Default is 512.</span>
+<span class="sd">        device: Device for model inference (&quot;auto&quot;, &quot;cpu&quot;, or &quot;cuda&quot;).</span>
+<span class="sd">            Default is &quot;auto&quot;.</span>
+<span class="sd">        output_dir: Optional directory to save segmentation outputs.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        tuple: A tuple containing:</span>
+<span class="sd">            - labels (pd.DataFrame): DataFrame with filepath and ratio columns</span>
+<span class="sd">              for each prompt (e.g., sky_ratio, cloud_ratio).</span>
+<span class="sd">            - masks (dict): Dictionary mapping filepath to dict of mask arrays.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; profile = pd.DataFrame({&quot;filepath&quot;: [&quot;img1.jpg&quot;, &quot;img2.jpg&quot;]})</span>
+<span class="sd">        &gt;&gt;&gt; labels, masks = segment(profile)</span>
+<span class="sd">        &gt;&gt;&gt; labels.columns</span>
+<span class="sd">        Index([&#39;filepath&#39;, &#39;sky_ratio&#39;, &#39;cloud_ratio&#39;, &#39;fog_ratio&#39;,</span>
+<span class="sd">               &#39;snow_ratio&#39;, &#39;brightness&#39;])</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">prompts</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">prompts</span> <span class="o">=</span> <span class="n">DEFAULT_PROMPTS</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+    <span class="c1"># Create output directory if specified</span>
+    <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># Resolve device</span>
+    <span class="n">resolved_device</span> <span class="o">=</span> <span class="n">_get_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using device: </span><span class="si">{</span><span class="n">resolved_device</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Load model</span>
+    <span class="n">model_tuple</span> <span class="o">=</span> <span class="n">_load_model</span><span class="p">(</span><span class="n">resolved_device</span><span class="p">)</span>
+    <span class="n">use_stub</span> <span class="o">=</span> <span class="n">model_tuple</span> <span class="ow">is</span> <span class="kc">None</span>
+
+    <span class="k">if</span> <span class="n">use_stub</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Running in stub mode (returning empty masks)&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Initialize result containers</span>
+    <span class="n">labels_data</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">masks_dict</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">filepath</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+
+        <span class="c1"># Read image</span>
+        <span class="n">img</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">img</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Failed to read image: </span><span class="si">{</span><span class="n">filepath</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="c1"># Add empty entry for failed images</span>
+            <span class="n">label_entry</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;filepath&quot;</span><span class="p">:</span> <span class="n">filepath</span><span class="p">,</span> <span class="s2">&quot;brightness&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">}</span>
+            <span class="k">for</span> <span class="n">prompt</span> <span class="ow">in</span> <span class="n">prompts</span><span class="p">:</span>
+                <span class="n">label_entry</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">prompt</span><span class="si">}</span><span class="s2">_ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.0</span>
+            <span class="n">labels_data</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">label_entry</span><span class="p">)</span>
+            <span class="n">masks_dict</span><span class="p">[</span><span class="n">filepath</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="n">p</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">prompts</span><span class="p">}</span>
+            <span class="k">continue</span>
+
+        <span class="c1"># Calculate brightness</span>
+        <span class="n">brightness</span> <span class="o">=</span> <span class="n">_calculate_brightness</span><span class="p">(</span><span class="n">img</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">use_stub</span><span class="p">:</span>
+            <span class="c1"># Stub mode: return zero masks</span>
+            <span class="n">mask_entry</span> <span class="o">=</span> <span class="p">{</span><span class="n">p</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">prompts</span><span class="p">}</span>
+            <span class="n">label_entry</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;filepath&quot;</span><span class="p">:</span> <span class="n">filepath</span><span class="p">,</span> <span class="s2">&quot;brightness&quot;</span><span class="p">:</span> <span class="n">brightness</span><span class="p">}</span>
+            <span class="k">for</span> <span class="n">prompt</span> <span class="ow">in</span> <span class="n">prompts</span><span class="p">:</span>
+                <span class="n">label_entry</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">prompt</span><span class="si">}</span><span class="s2">_ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.0</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Actual segmentation</span>
+            <span class="n">mask_entry</span> <span class="o">=</span> <span class="n">_segment_single_image</span><span class="p">(</span>
+                <span class="n">img</span><span class="p">,</span> <span class="n">prompts</span><span class="p">,</span> <span class="n">model_tuple</span><span class="p">,</span> <span class="n">resize</span>
+            <span class="p">)</span>
+            <span class="n">label_entry</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;filepath&quot;</span><span class="p">:</span> <span class="n">filepath</span><span class="p">,</span> <span class="s2">&quot;brightness&quot;</span><span class="p">:</span> <span class="n">brightness</span><span class="p">}</span>
+            <span class="k">for</span> <span class="n">prompt</span> <span class="ow">in</span> <span class="n">prompts</span><span class="p">:</span>
+                <span class="n">ratio</span> <span class="o">=</span> <span class="n">_calculate_ratio</span><span class="p">(</span><span class="n">mask_entry</span><span class="p">[</span><span class="n">prompt</span><span class="p">])</span>
+                <span class="n">label_entry</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">prompt</span><span class="si">}</span><span class="s2">_ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ratio</span>
+
+        <span class="n">labels_data</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">label_entry</span><span class="p">)</span>
+        <span class="n">masks_dict</span><span class="p">[</span><span class="n">filepath</span><span class="p">]</span> <span class="o">=</span> <span class="n">mask_entry</span>
+
+        <span class="c1"># Save masks if output_dir specified</span>
+        <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">_save_masks</span><span class="p">(</span><span class="n">filepath</span><span class="p">,</span> <span class="n">mask_entry</span><span class="p">,</span> <span class="n">output_dir</span><span class="p">)</span>
+
+    <span class="c1"># Create labels DataFrame</span>
+    <span class="n">labels</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">labels_data</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Segmented </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">profile</span><span class="p">)</span><span class="si">}</span><span class="s2"> images with </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">prompts</span><span class="p">)</span><span class="si">}</span><span class="s2"> prompts&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">labels</span><span class="p">,</span> <span class="n">masks_dict</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_calculate_brightness</span><span class="p">(</span><span class="n">img</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate normalized brightness of an image.</span>
+
+<span class="sd">    Converts the image to grayscale and computes the mean pixel value</span>
+<span class="sd">    normalized to the range [0, 1].</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        img: Input image as numpy array (BGR format).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        float: Normalized brightness value between 0 and 1.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+        <span class="n">gray</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">cvtColor</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">COLOR_BGR2GRAY</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">gray</span> <span class="o">=</span> <span class="n">img</span>
+
+    <span class="n">mean_value</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">gray</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">mean_value</span> <span class="o">/</span> <span class="mf">255.0</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_save_masks</span><span class="p">(</span>
+    <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">masks</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Save segmentation masks to output directory.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filepath: Original image filepath.</span>
+<span class="sd">        masks: Dictionary mapping prompt names to mask arrays.</span>
+<span class="sd">        output_dir: Directory to save masks.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Create filename prefix from original image</span>
+    <span class="n">basename</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span>
+
+    <span class="k">for</span> <span class="n">prompt</span><span class="p">,</span> <span class="n">mask</span> <span class="ow">in</span> <span class="n">masks</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">mask_filename</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">basename</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">prompt</span><span class="si">}</span><span class="s2">_mask.png&quot;</span>
+        <span class="n">mask_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span> <span class="o">/</span> <span class="n">mask_filename</span>
+        <span class="n">cv2</span><span class="o">.</span><span class="n">imwrite</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">mask_path</span><span class="p">),</span> <span class="n">mask</span><span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

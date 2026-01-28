@@ -1,0 +1,312 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.qc &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">yamami.qc</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for yamami.qc</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Quality control module for yamami.</span>
+
+<span class="sd">Provides pre-alignment and post-alignment quality control functions</span>
+<span class="sd">to filter out unusable images based on brightness, fog, cloud coverage,</span>
+<span class="sd">and AOI (Area of Interest) obscuration.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">yamami.logging</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+<span class="c1"># Reason code constants</span>
+<span class="n">REASON_TOO_DARK</span> <span class="o">=</span> <span class="s2">&quot;TOO_DARK&quot;</span>
+<span class="n">REASON_TOO_BRIGHT</span> <span class="o">=</span> <span class="s2">&quot;TOO_BRIGHT&quot;</span>
+<span class="n">REASON_HIGH_FOG</span> <span class="o">=</span> <span class="s2">&quot;HIGH_FOG&quot;</span>
+<span class="n">REASON_HIGH_CLOUD</span> <span class="o">=</span> <span class="s2">&quot;HIGH_CLOUD&quot;</span>
+<span class="n">REASON_AOI_OBSCURED</span> <span class="o">=</span> <span class="s2">&quot;AOI_OBSCURED&quot;</span>
+
+
+<div class="viewcode-block" id="pre_qc">
+<a class="viewcode-back" href="../../api/qc.html#yamami.qc.pre_qc">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">pre_qc</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">labels</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">brightness_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.08</span><span class="p">,</span>
+    <span class="n">brightness_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span><span class="p">,</span>
+    <span class="n">fog_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.30</span><span class="p">,</span>
+    <span class="n">cloud_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.40</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Pre-alignment quality control.</span>
+
+<span class="sd">    Filters images based on brightness and atmospheric conditions before</span>
+<span class="sd">    alignment. Images failing QC thresholds are marked as unusable with</span>
+<span class="sd">    corresponding reason codes.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; column.</span>
+<span class="sd">        labels: DataFrame with segmentation labels including &#39;filepath&#39;,</span>
+<span class="sd">            &#39;brightness&#39;, &#39;fog_ratio&#39;, and &#39;cloud_ratio&#39; columns.</span>
+<span class="sd">        brightness_min: Minimum acceptable brightness (0-1). Default is 0.08.</span>
+<span class="sd">        brightness_max: Maximum acceptable brightness (0-1). Default is 0.95.</span>
+<span class="sd">        fog_max: Maximum acceptable fog ratio (0-1). Default is 0.30.</span>
+<span class="sd">        cloud_max: Maximum acceptable cloud ratio (0-1). Default is 0.40.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: DataFrame with original profile data plus:</span>
+<span class="sd">            - is_usable (bool): Whether the image passes QC.</span>
+<span class="sd">            - reason_codes (str): Comma-separated list of failure reasons.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; result = pre_qc(profile, labels)</span>
+<span class="sd">        &gt;&gt;&gt; result[result[&quot;is_usable&quot;] == False][&quot;reason_codes&quot;]</span>
+<span class="sd">        0    TOO_DARK,HIGH_FOG</span>
+<span class="sd">        Name: reason_codes, dtype: object</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Merge profile with labels on filepath</span>
+    <span class="n">merged</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">labels</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;filepath&quot;</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Initialize QC columns</span>
+    <span class="n">is_usable</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">([</span><span class="kc">True</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">merged</span><span class="p">),</span> <span class="n">index</span><span class="o">=</span><span class="n">merged</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+    <span class="n">reason_codes</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">([</span><span class="s2">&quot;&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">merged</span><span class="p">),</span> <span class="n">index</span><span class="o">=</span><span class="n">merged</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+
+    <span class="c1"># Check brightness thresholds</span>
+    <span class="k">if</span> <span class="s2">&quot;brightness&quot;</span> <span class="ow">in</span> <span class="n">merged</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">too_dark</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="s2">&quot;brightness&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">brightness_min</span>
+        <span class="n">too_bright</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="s2">&quot;brightness&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">brightness_max</span>
+
+        <span class="n">is_usable</span> <span class="o">=</span> <span class="n">is_usable</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">too_dark</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">too_bright</span>
+        <span class="n">reason_codes</span> <span class="o">=</span> <span class="n">_append_reason</span><span class="p">(</span><span class="n">reason_codes</span><span class="p">,</span> <span class="n">too_dark</span><span class="p">,</span> <span class="n">REASON_TOO_DARK</span><span class="p">)</span>
+        <span class="n">reason_codes</span> <span class="o">=</span> <span class="n">_append_reason</span><span class="p">(</span><span class="n">reason_codes</span><span class="p">,</span> <span class="n">too_bright</span><span class="p">,</span> <span class="n">REASON_TOO_BRIGHT</span><span class="p">)</span>
+
+    <span class="c1"># Check fog ratio</span>
+    <span class="k">if</span> <span class="s2">&quot;fog_ratio&quot;</span> <span class="ow">in</span> <span class="n">merged</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">high_fog</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="s2">&quot;fog_ratio&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">fog_max</span>
+        <span class="n">is_usable</span> <span class="o">=</span> <span class="n">is_usable</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">high_fog</span>
+        <span class="n">reason_codes</span> <span class="o">=</span> <span class="n">_append_reason</span><span class="p">(</span><span class="n">reason_codes</span><span class="p">,</span> <span class="n">high_fog</span><span class="p">,</span> <span class="n">REASON_HIGH_FOG</span><span class="p">)</span>
+
+    <span class="c1"># Check cloud ratio</span>
+    <span class="k">if</span> <span class="s2">&quot;cloud_ratio&quot;</span> <span class="ow">in</span> <span class="n">merged</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">high_cloud</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="s2">&quot;cloud_ratio&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">cloud_max</span>
+        <span class="n">is_usable</span> <span class="o">=</span> <span class="n">is_usable</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">high_cloud</span>
+        <span class="n">reason_codes</span> <span class="o">=</span> <span class="n">_append_reason</span><span class="p">(</span><span class="n">reason_codes</span><span class="p">,</span> <span class="n">high_cloud</span><span class="p">,</span> <span class="n">REASON_HIGH_CLOUD</span><span class="p">)</span>
+
+    <span class="c1"># Build result DataFrame</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;is_usable&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">is_usable</span><span class="o">.</span><span class="n">values</span>
+    <span class="n">result</span><span class="p">[</span><span class="s2">&quot;reason_codes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">reason_codes</span><span class="o">.</span><span class="n">values</span>
+
+    <span class="n">usable_count</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;is_usable&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;Pre-QC: </span><span class="si">{</span><span class="n">usable_count</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="p">)</span><span class="si">}</span><span class="s2"> images passed &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;(brightness=[</span><span class="si">{</span><span class="n">brightness_min</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">,</span><span class="si">{</span><span class="n">brightness_max</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">], &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;fog&lt;</span><span class="si">{</span><span class="n">fog_max</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">, cloud&lt;</span><span class="si">{</span><span class="n">cloud_max</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">)&quot;</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<div class="viewcode-block" id="qc">
+<a class="viewcode-back" href="../../api/qc.html#yamami.qc.qc">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">qc</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">labels</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">aoi_mask</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">brightness_min</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.08</span><span class="p">,</span>
+    <span class="n">brightness_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span><span class="p">,</span>
+    <span class="n">fog_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.30</span><span class="p">,</span>
+    <span class="n">cloud_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.40</span><span class="p">,</span>
+    <span class="n">aoi_cloud_max</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.20</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Full quality control with AOI consideration.</span>
+
+<span class="sd">    Performs pre-alignment QC checks plus additional checks for AOI</span>
+<span class="sd">    (Area of Interest) obscuration. Use this after alignment when</span>
+<span class="sd">    the AOI mask is available.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; column.</span>
+<span class="sd">        labels: DataFrame with segmentation labels including &#39;filepath&#39;,</span>
+<span class="sd">            &#39;brightness&#39;, &#39;fog_ratio&#39;, &#39;cloud_ratio&#39;, and optionally</span>
+<span class="sd">            &#39;aoi_cloud_ratio&#39; columns.</span>
+<span class="sd">        aoi_mask: Binary mask (0/255) defining the Area of Interest.</span>
+<span class="sd">        brightness_min: Minimum acceptable brightness (0-1). Default is 0.08.</span>
+<span class="sd">        brightness_max: Maximum acceptable brightness (0-1). Default is 0.95.</span>
+<span class="sd">        fog_max: Maximum acceptable fog ratio (0-1). Default is 0.30.</span>
+<span class="sd">        cloud_max: Maximum acceptable cloud ratio (0-1). Default is 0.40.</span>
+<span class="sd">        aoi_cloud_max: Maximum acceptable cloud ratio within AOI (0-1).</span>
+<span class="sd">            Default is 0.20.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.DataFrame: DataFrame with original profile data plus:</span>
+<span class="sd">            - is_usable (bool): Whether the image passes QC.</span>
+<span class="sd">            - reason_codes (str): Comma-separated list of failure reasons.</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        &gt;&gt;&gt; result = qc(profile, labels, aoi_mask)</span>
+<span class="sd">        &gt;&gt;&gt; result[result[&quot;is_usable&quot;] == False][&quot;reason_codes&quot;]</span>
+<span class="sd">        0    AOI_OBSCURED</span>
+<span class="sd">        Name: reason_codes, dtype: object</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># First apply pre_qc checks</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">pre_qc</span><span class="p">(</span>
+        <span class="n">profile</span><span class="p">,</span>
+        <span class="n">labels</span><span class="p">,</span>
+        <span class="n">brightness_min</span><span class="o">=</span><span class="n">brightness_min</span><span class="p">,</span>
+        <span class="n">brightness_max</span><span class="o">=</span><span class="n">brightness_max</span><span class="p">,</span>
+        <span class="n">fog_max</span><span class="o">=</span><span class="n">fog_max</span><span class="p">,</span>
+        <span class="n">cloud_max</span><span class="o">=</span><span class="n">cloud_max</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Check AOI cloud coverage if column exists</span>
+    <span class="k">if</span> <span class="s2">&quot;aoi_cloud_ratio&quot;</span> <span class="ow">in</span> <span class="n">labels</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="c1"># Merge with labels for AOI-specific checks</span>
+        <span class="n">merged</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">labels</span><span class="p">[[</span><span class="s2">&quot;filepath&quot;</span><span class="p">,</span> <span class="s2">&quot;aoi_cloud_ratio&quot;</span><span class="p">]],</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;filepath&quot;</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+        <span class="n">aoi_obscured</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="s2">&quot;aoi_cloud_ratio&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">aoi_cloud_max</span>
+
+        <span class="c1"># Update is_usable</span>
+        <span class="n">result</span><span class="p">[</span><span class="s2">&quot;is_usable&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;is_usable&quot;</span><span class="p">]</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">aoi_obscured</span><span class="o">.</span><span class="n">values</span>
+
+        <span class="c1"># Append reason codes</span>
+        <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="n">merged</span><span class="p">[</span><span class="n">aoi_obscured</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">:</span>
+            <span class="n">current</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">idx</span><span class="p">,</span> <span class="s2">&quot;reason_codes&quot;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">current</span><span class="p">:</span>
+                <span class="n">result</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">idx</span><span class="p">,</span> <span class="s2">&quot;reason_codes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">current</span><span class="si">}</span><span class="s2">,</span><span class="si">{</span><span class="n">REASON_AOI_OBSCURED</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">result</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">idx</span><span class="p">,</span> <span class="s2">&quot;reason_codes&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">REASON_AOI_OBSCURED</span>
+
+    <span class="n">usable_count</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;is_usable&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;Full QC: </span><span class="si">{</span><span class="n">usable_count</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="p">)</span><span class="si">}</span><span class="s2"> images passed &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;(aoi_cloud&lt;</span><span class="si">{</span><span class="n">aoi_cloud_max</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">)&quot;</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_append_reason</span><span class="p">(</span>
+    <span class="n">reason_codes</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Append a reason code to entries where condition is True.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        reason_codes: Series of current reason code strings.</span>
+<span class="sd">        condition: Boolean series indicating which entries to update.</span>
+<span class="sd">        reason: Reason code to append.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.Series: Updated reason codes series.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">reason_codes</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="n">result</span><span class="p">[</span><span class="n">condition</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">:</span>
+        <span class="n">current</span> <span class="o">=</span> <span class="n">result</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">current</span><span class="p">:</span>
+            <span class="n">result</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">current</span><span class="si">}</span><span class="s2">,</span><span class="si">{</span><span class="n">reason</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">result</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">reason</span>
+    <span class="k">return</span> <span class="n">result</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

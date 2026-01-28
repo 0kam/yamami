@@ -1,0 +1,538 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>yamami.phenology &mdash; yamami 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            yamami
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../quickstart.html">Quick Start Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/index.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">yamami</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">yamami.phenology</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for yamami.phenology</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Vegetation phenology analysis module for YAMAMI.</span>
+
+<span class="sd">This module provides functions for computing greenness ratio (GR) time series</span>
+<span class="sd">and extracting phenological dates using double-sigmoid curve fitting.</span>
+
+<span class="sd">The main functions are:</span>
+<span class="sd">- gr(): Compute greenness ratio from RGB images</span>
+<span class="sd">- fit_double_sigmoid(): Fit double-sigmoid curve to time series</span>
+<span class="sd">- phenology(): Extract phenological dates (green-up, green-max, green-down)</span>
+
+<span class="sd">Example usage:</span>
+<span class="sd">    &gt;&gt;&gt; from yamami.phenology import gr, phenology</span>
+<span class="sd">    &gt;&gt;&gt; images, timeseries = gr(profile_df, aoi_mask)</span>
+<span class="sd">    &gt;&gt;&gt; pheno_dates = phenology(timeseries)</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">cv2</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.optimize</span><span class="w"> </span><span class="kn">import</span> <span class="n">curve_fit</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">yamami.logging</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_double_sigmoid</span><span class="p">(</span>
+    <span class="n">t</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">base</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">amp1</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">k1</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">t1</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">amp2</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">k2</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">t2</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Double-sigmoid model for vegetation phenology.</span>
+
+<span class="sd">    The model describes seasonal vegetation dynamics with:</span>
+<span class="sd">    - Rising sigmoid for spring green-up</span>
+<span class="sd">    - Falling sigmoid for autumn senescence</span>
+
+<span class="sd">    Model: f(t) = base + amp1/(1+exp(-k1*(t-t1))) - amp2/(1+exp(-k2*(t-t2)))</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        t: Time values (typically day of year).</span>
+<span class="sd">        base: Baseline/winter value.</span>
+<span class="sd">        amp1: Amplitude of rising sigmoid.</span>
+<span class="sd">        k1: Rate parameter of rising sigmoid.</span>
+<span class="sd">        t1: Inflection point (DOY) of rising sigmoid (green-up date).</span>
+<span class="sd">        amp2: Amplitude of falling sigmoid.</span>
+<span class="sd">        k2: Rate parameter of falling sigmoid.</span>
+<span class="sd">        t2: Inflection point (DOY) of falling sigmoid (green-down date).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Model predictions at time points t.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">rising</span> <span class="o">=</span> <span class="n">amp1</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">k1</span> <span class="o">*</span> <span class="p">(</span><span class="n">t</span> <span class="o">-</span> <span class="n">t1</span><span class="p">)))</span>
+    <span class="n">falling</span> <span class="o">=</span> <span class="n">amp2</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">k2</span> <span class="o">*</span> <span class="p">(</span><span class="n">t</span> <span class="o">-</span> <span class="n">t2</span><span class="p">)))</span>
+    <span class="k">return</span> <span class="n">base</span> <span class="o">+</span> <span class="n">rising</span> <span class="o">-</span> <span class="n">falling</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_compute_gr_image</span><span class="p">(</span><span class="n">image</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Compute greenness ratio for an RGB image.</span>
+
+<span class="sd">    GR = G / (R + G + B)</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        image: RGB image with shape (H, W, 3), values in range [0, 255].</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Greenness ratio image with shape (H, W), values in range [0, 1].</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Convert to float to avoid integer overflow</span>
+    <span class="n">img_float</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+
+    <span class="c1"># Extract channels (assuming BGR order from OpenCV)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">img_float</span><span class="p">[:,</span> <span class="p">:,</span> <span class="mi">0</span><span class="p">]</span>
+    <span class="n">g</span> <span class="o">=</span> <span class="n">img_float</span><span class="p">[:,</span> <span class="p">:,</span> <span class="mi">1</span><span class="p">]</span>
+    <span class="n">r</span> <span class="o">=</span> <span class="n">img_float</span><span class="p">[:,</span> <span class="p">:,</span> <span class="mi">2</span><span class="p">]</span>
+
+    <span class="c1"># Compute sum with handling for zero</span>
+    <span class="n">total</span> <span class="o">=</span> <span class="n">r</span> <span class="o">+</span> <span class="n">g</span> <span class="o">+</span> <span class="n">b</span>
+
+    <span class="c1"># Compute GR, handling division by zero</span>
+    <span class="k">with</span> <span class="n">np</span><span class="o">.</span><span class="n">errstate</span><span class="p">(</span><span class="n">divide</span><span class="o">=</span><span class="s2">&quot;ignore&quot;</span><span class="p">,</span> <span class="n">invalid</span><span class="o">=</span><span class="s2">&quot;ignore&quot;</span><span class="p">):</span>
+        <span class="n">gr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">total</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="n">g</span> <span class="o">/</span> <span class="n">total</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">gr</span>
+
+
+<div class="viewcode-block" id="gr">
+<a class="viewcode-back" href="../../api/phenology.html#yamami.phenology.gr">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">gr</span><span class="p">(</span>
+    <span class="n">profile</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">aoi_mask</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">daily_max</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">dict</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Compute greenness ratio time series from image profile.</span>
+
+<span class="sd">    Calculates GR = G / (R + G + B) for each pixel within the AOI mask,</span>
+<span class="sd">    optionally aggregating to daily maximum values.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        profile: DataFrame with &#39;filepath&#39; and &#39;timestamp&#39; columns.</span>
+<span class="sd">        aoi_mask: Boolean mask array defining the area of interest.</span>
+<span class="sd">            Pixels with True are included in the analysis.</span>
+<span class="sd">        daily_max: If True, aggregate multiple observations per day to</span>
+<span class="sd">            daily maximum value. Default is True.</span>
+<span class="sd">        output_dir: Optional directory to save intermediate GR images.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (daily_images, timeseries) where:</span>
+<span class="sd">        - daily_images: Dict mapping date strings to GR image arrays</span>
+<span class="sd">        - timeseries: DataFrame with date, doy, and mean_gr columns</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If profile is empty or missing required columns.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">profile</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Empty profile DataFrame provided&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{},</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;doy&quot;</span><span class="p">,</span> <span class="s2">&quot;mean_gr&quot;</span><span class="p">])</span>
+
+    <span class="n">required_cols</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">,</span> <span class="s2">&quot;timestamp&quot;</span><span class="p">]</span>
+    <span class="n">missing_cols</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">required_cols</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">missing_cols</span><span class="p">:</span>
+        <span class="c1"># Try alternative column names</span>
+        <span class="k">if</span> <span class="s2">&quot;path&quot;</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">columns</span> <span class="ow">and</span> <span class="s2">&quot;filepath&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">profile</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="s2">&quot;filepath&quot;</span><span class="p">})</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing required columns: </span><span class="si">{</span><span class="n">missing_cols</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Initialize storage</span>
+    <span class="n">gr_records</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">daily_images</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># Process each image</span>
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">filepath</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+        <span class="n">timestamp</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;timestamp&quot;</span><span class="p">]</span>
+
+        <span class="c1"># Load image</span>
+        <span class="n">img</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">filepath</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">img</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Could not load image: </span><span class="si">{</span><span class="n">filepath</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">continue</span>
+
+        <span class="c1"># Compute GR for the image</span>
+        <span class="n">gr_img</span> <span class="o">=</span> <span class="n">_compute_gr_image</span><span class="p">(</span><span class="n">img</span><span class="p">)</span>
+
+        <span class="c1"># Apply AOI mask and compute mean</span>
+        <span class="k">if</span> <span class="n">aoi_mask</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">gr_img</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Mask shape </span><span class="si">{</span><span class="n">aoi_mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> does not match image shape </span><span class="si">{</span><span class="n">gr_img</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+            <span class="k">continue</span>
+
+        <span class="n">masked_gr</span> <span class="o">=</span> <span class="n">gr_img</span><span class="p">[</span><span class="n">aoi_mask</span><span class="p">]</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">masked_gr</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;No pixels in AOI mask&quot;</span><span class="p">)</span>
+            <span class="k">continue</span>
+
+        <span class="n">mean_gr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nanmean</span><span class="p">(</span><span class="n">masked_gr</span><span class="p">)</span>
+        <span class="n">date</span> <span class="o">=</span> <span class="n">timestamp</span><span class="o">.</span><span class="n">date</span><span class="p">()</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">timestamp</span><span class="p">,</span> <span class="s2">&quot;date&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">timestamp</span><span class="p">)</span><span class="o">.</span><span class="n">date</span><span class="p">()</span>
+
+        <span class="n">gr_records</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;timestamp&quot;</span><span class="p">:</span> <span class="n">timestamp</span><span class="p">,</span>
+                <span class="s2">&quot;date&quot;</span><span class="p">:</span> <span class="n">date</span><span class="p">,</span>
+                <span class="s2">&quot;mean_gr&quot;</span><span class="p">:</span> <span class="n">mean_gr</span><span class="p">,</span>
+                <span class="s2">&quot;gr_image&quot;</span><span class="p">:</span> <span class="n">gr_img</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">gr_records</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;No valid GR values computed&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{},</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;doy&quot;</span><span class="p">,</span> <span class="s2">&quot;mean_gr&quot;</span><span class="p">])</span>
+
+    <span class="c1"># Create DataFrame</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">gr_records</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">daily_max</span><span class="p">:</span>
+        <span class="c1"># Group by date and take maximum</span>
+        <span class="n">daily_df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;date&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">({</span><span class="s2">&quot;mean_gr&quot;</span><span class="p">:</span> <span class="s2">&quot;max&quot;</span><span class="p">})</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+
+        <span class="c1"># Also get the corresponding image for each day&#39;s max</span>
+        <span class="k">for</span> <span class="n">date</span> <span class="ow">in</span> <span class="n">daily_df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">():</span>
+            <span class="n">day_data</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">date</span><span class="p">]</span>
+            <span class="n">max_idx</span> <span class="o">=</span> <span class="n">day_data</span><span class="p">[</span><span class="s2">&quot;mean_gr&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">idxmax</span><span class="p">()</span>
+            <span class="n">daily_images</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">date</span><span class="p">)]</span> <span class="o">=</span> <span class="n">day_data</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">max_idx</span><span class="p">,</span> <span class="s2">&quot;gr_image&quot;</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">daily_df</span> <span class="o">=</span> <span class="n">df</span><span class="p">[[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;mean_gr&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+            <span class="n">key</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;date&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;timestamp&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="n">daily_images</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;gr_image&quot;</span><span class="p">]</span>
+
+    <span class="c1"># Add day of year</span>
+    <span class="n">daily_df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">daily_df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">])</span>
+    <span class="n">daily_df</span><span class="p">[</span><span class="s2">&quot;doy&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">daily_df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">dayofyear</span>
+
+    <span class="c1"># Save intermediate images if requested</span>
+    <span class="k">if</span> <span class="n">output_dir</span><span class="p">:</span>
+        <span class="n">output_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span>
+        <span class="n">output_path</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">date_str</span><span class="p">,</span> <span class="n">gr_img</span> <span class="ow">in</span> <span class="n">daily_images</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="c1"># Save as float32 npy file</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">output_path</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">&quot;gr_</span><span class="si">{</span><span class="n">date_str</span><span class="si">}</span><span class="s2">.npy&quot;</span><span class="p">,</span> <span class="n">gr_img</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+
+    <span class="c1"># Prepare output timeseries</span>
+    <span class="n">timeseries</span> <span class="o">=</span> <span class="n">daily_df</span><span class="p">[[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;doy&quot;</span><span class="p">,</span> <span class="s2">&quot;mean_gr&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">timeseries</span> <span class="o">=</span> <span class="n">timeseries</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;doy&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">daily_images</span><span class="p">,</span> <span class="n">timeseries</span></div>
+
+
+
+<div class="viewcode-block" id="fit_double_sigmoid">
+<a class="viewcode-back" href="../../api/phenology.html#yamami.phenology.fit_double_sigmoid">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fit_double_sigmoid</span><span class="p">(</span>
+    <span class="n">time</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">values</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">max_iter</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5000</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fit double-sigmoid curve to greenness time series.</span>
+
+<span class="sd">    Uses scipy.optimize.curve_fit with bounds to fit the double-sigmoid</span>
+<span class="sd">    model to observed GR values.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        time: Time values (typically day of year), shape (N,).</span>
+<span class="sd">        values: GR values corresponding to time points, shape (N,).</span>
+<span class="sd">        max_iter: Maximum iterations for curve fitting. Default is 5000.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Dictionary containing:</span>
+<span class="sd">        - &#39;params&#39;: Fitted parameters (base, amp1, k1, t1, amp2, k2, t2)</span>
+<span class="sd">        - &#39;t1&#39; (gup_doy): Green-up date (inflection of rising sigmoid)</span>
+<span class="sd">        - &#39;t2&#39; (gdown_doy): Green-down date (inflection of falling sigmoid)</span>
+<span class="sd">        - &#39;gmax_doy&#39;: Date of maximum fitted value</span>
+<span class="sd">        - &#39;gmax_value&#39;: Maximum fitted value</span>
+<span class="sd">        - &#39;fit_rmse&#39;: Root mean square error of fit</span>
+<span class="sd">        - &#39;fit_status&#39;: &#39;success&#39; or &#39;failed&#39;</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="s2">&quot;t1&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span>
+        <span class="s2">&quot;t2&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span>
+        <span class="s2">&quot;gmax_doy&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span>
+        <span class="s2">&quot;gmax_value&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span>
+        <span class="s2">&quot;fit_rmse&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span>
+        <span class="s2">&quot;fit_status&quot;</span><span class="p">:</span> <span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+    <span class="p">}</span>
+
+    <span class="c1"># Need minimum number of points</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">time</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">30</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Insufficient data points (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">time</span><span class="p">)</span><span class="si">}</span><span class="s2">) for double-sigmoid fit&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">result</span>
+
+    <span class="c1"># Remove NaN values</span>
+    <span class="n">valid_mask</span> <span class="o">=</span> <span class="o">~</span><span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+    <span class="n">t</span> <span class="o">=</span> <span class="n">time</span><span class="p">[</span><span class="n">valid_mask</span><span class="p">]</span>
+    <span class="n">v</span> <span class="o">=</span> <span class="n">values</span><span class="p">[</span><span class="n">valid_mask</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">t</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">30</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Insufficient valid data points (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">t</span><span class="p">)</span><span class="si">}</span><span class="s2">) after removing NaNs&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">result</span>
+
+    <span class="c1"># Estimate initial parameters</span>
+    <span class="n">v_min</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+    <span class="n">v_max</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+    <span class="n">v_range</span> <span class="o">=</span> <span class="n">v_max</span> <span class="o">-</span> <span class="n">v_min</span>
+
+    <span class="c1"># Initial guesses</span>
+    <span class="n">base0</span> <span class="o">=</span> <span class="n">v_min</span>
+    <span class="n">amp0</span> <span class="o">=</span> <span class="n">v_range</span> <span class="o">*</span> <span class="mf">1.2</span>  <span class="c1"># Slightly larger to allow for overshoot</span>
+    <span class="n">k0</span> <span class="o">=</span> <span class="mf">0.1</span>  <span class="c1"># Moderate rate</span>
+    <span class="n">t1_0</span> <span class="o">=</span> <span class="n">t</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">v</span><span class="p">))]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span> <span class="k">else</span> <span class="n">t</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">-</span> <span class="mi">60</span>  <span class="c1"># Green-up</span>
+    <span class="n">t2_0</span> <span class="o">=</span> <span class="n">t</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">argmin</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">v</span><span class="p">))]</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">2</span> <span class="k">else</span> <span class="n">t</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">+</span> <span class="mi">60</span>  <span class="c1"># Green-down</span>
+
+    <span class="n">p0</span> <span class="o">=</span> <span class="p">[</span><span class="n">base0</span><span class="p">,</span> <span class="n">amp0</span><span class="p">,</span> <span class="n">k0</span><span class="p">,</span> <span class="n">t1_0</span><span class="p">,</span> <span class="n">amp0</span><span class="p">,</span> <span class="n">k0</span><span class="p">,</span> <span class="n">t2_0</span><span class="p">]</span>
+
+    <span class="c1"># Parameter bounds</span>
+    <span class="n">t_min</span><span class="p">,</span> <span class="n">t_max</span> <span class="o">=</span> <span class="n">t</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">t</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+    <span class="n">bounds</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.001</span><span class="p">,</span> <span class="n">t_min</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.001</span><span class="p">,</span> <span class="n">t_min</span><span class="p">],</span>  <span class="c1"># Lower bounds</span>
+        <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="n">t_max</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="n">t_max</span><span class="p">],</span>  <span class="c1"># Upper bounds</span>
+    <span class="p">)</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">popt</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">curve_fit</span><span class="p">(</span>
+            <span class="n">_double_sigmoid</span><span class="p">,</span>
+            <span class="n">t</span><span class="p">,</span>
+            <span class="n">v</span><span class="p">,</span>
+            <span class="n">p0</span><span class="o">=</span><span class="n">p0</span><span class="p">,</span>
+            <span class="n">bounds</span><span class="o">=</span><span class="n">bounds</span><span class="p">,</span>
+            <span class="n">maxfev</span><span class="o">=</span><span class="n">max_iter</span><span class="p">,</span>
+            <span class="n">method</span><span class="o">=</span><span class="s2">&quot;trf&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Compute fitted values and RMSE</span>
+        <span class="n">v_fitted</span> <span class="o">=</span> <span class="n">_double_sigmoid</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="o">*</span><span class="n">popt</span><span class="p">)</span>
+        <span class="n">rmse</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">((</span><span class="n">v</span> <span class="o">-</span> <span class="n">v_fitted</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">))</span>
+
+        <span class="c1"># Extract inflection points</span>
+        <span class="n">base</span><span class="p">,</span> <span class="n">amp1</span><span class="p">,</span> <span class="n">k1</span><span class="p">,</span> <span class="n">t1</span><span class="p">,</span> <span class="n">amp2</span><span class="p">,</span> <span class="n">k2</span><span class="p">,</span> <span class="n">t2</span> <span class="o">=</span> <span class="n">popt</span>
+
+        <span class="c1"># Find maximum of fitted curve</span>
+        <span class="n">t_fine</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="n">t_min</span><span class="p">,</span> <span class="n">t_max</span><span class="p">,</span> <span class="mi">365</span><span class="p">)</span>
+        <span class="n">v_fine</span> <span class="o">=</span> <span class="n">_double_sigmoid</span><span class="p">(</span><span class="n">t_fine</span><span class="p">,</span> <span class="o">*</span><span class="n">popt</span><span class="p">)</span>
+        <span class="n">max_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">v_fine</span><span class="p">)</span>
+        <span class="n">gmax_doy</span> <span class="o">=</span> <span class="n">t_fine</span><span class="p">[</span><span class="n">max_idx</span><span class="p">]</span>
+        <span class="n">gmax_value</span> <span class="o">=</span> <span class="n">v_fine</span><span class="p">[</span><span class="n">max_idx</span><span class="p">]</span>
+
+        <span class="n">result</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;params&quot;</span><span class="p">:</span> <span class="n">popt</span><span class="p">,</span>
+                <span class="s2">&quot;t1&quot;</span><span class="p">:</span> <span class="n">t1</span><span class="p">,</span>  <span class="c1"># Green-up DOY</span>
+                <span class="s2">&quot;t2&quot;</span><span class="p">:</span> <span class="n">t2</span><span class="p">,</span>  <span class="c1"># Green-down DOY</span>
+                <span class="s2">&quot;gmax_doy&quot;</span><span class="p">:</span> <span class="n">gmax_doy</span><span class="p">,</span>
+                <span class="s2">&quot;gmax_value&quot;</span><span class="p">:</span> <span class="n">gmax_value</span><span class="p">,</span>
+                <span class="s2">&quot;fit_rmse&quot;</span><span class="p">:</span> <span class="n">rmse</span><span class="p">,</span>
+                <span class="s2">&quot;fit_status&quot;</span><span class="p">:</span> <span class="s2">&quot;success&quot;</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+
+    <span class="k">except</span> <span class="p">(</span><span class="ne">RuntimeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">)</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Curve fitting failed: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<div class="viewcode-block" id="phenology">
+<a class="viewcode-back" href="../../api/phenology.html#yamami.phenology.phenology">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">phenology</span><span class="p">(</span>
+    <span class="n">gr_data</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">dict</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">],</span>
+    <span class="n">model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;double_sigmoid&quot;</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Extract phenology dates from GR time series.</span>
+
+<span class="sd">    Fits a phenological model to the GR time series and extracts key dates:</span>
+<span class="sd">    - gup_doy: Green-up date (inflection point of rising phase)</span>
+<span class="sd">    - gdown_doy: Green-down date (inflection point of falling phase)</span>
+<span class="sd">    - gmax_doy: Date of maximum greenness</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        gr_data: Either a DataFrame with &#39;doy&#39; and &#39;mean_gr&#39; columns,</span>
+<span class="sd">            or a dict of date-indexed GR images from gr() function.</span>
+<span class="sd">        model: Phenological model to use. Currently only &#39;double_sigmoid&#39;</span>
+<span class="sd">            is supported. Default is &#39;double_sigmoid&#39;.</span>
+<span class="sd">        output_dir: Optional directory to save fitted curve data.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with columns:</span>
+<span class="sd">        - row, col: Pixel coordinates (if pixel-level fitting)</span>
+<span class="sd">        - gup_doy: Green-up day of year</span>
+<span class="sd">        - gdown_doy: Green-down day of year</span>
+<span class="sd">        - gmax_doy: Day of maximum greenness</span>
+<span class="sd">        - gmax_value: Maximum greenness value</span>
+<span class="sd">        - fit_rmse: Root mean square error of fit</span>
+<span class="sd">        - fit_status: &#39;success&#39; or &#39;failed&#39;</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If model is not recognized or gr_data format is invalid.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">model</span> <span class="o">!=</span> <span class="s2">&quot;double_sigmoid&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown model: </span><span class="si">{</span><span class="n">model</span><span class="si">}</span><span class="s2">. Only &#39;double_sigmoid&#39; is supported.&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Handle DataFrame input</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">gr_data</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
+        <span class="c1"># Check for required columns</span>
+        <span class="k">if</span> <span class="s2">&quot;doy&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">gr_data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="k">if</span> <span class="s2">&quot;date&quot;</span> <span class="ow">in</span> <span class="n">gr_data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+                <span class="n">gr_data</span> <span class="o">=</span> <span class="n">gr_data</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+                <span class="n">gr_data</span><span class="p">[</span><span class="s2">&quot;doy&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">gr_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">dayofyear</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;gr_data must have &#39;doy&#39; or &#39;date&#39; column&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="s2">&quot;mean_gr&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">gr_data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;gr_data must have &#39;mean_gr&#39; column&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Fit to mean time series</span>
+        <span class="n">t</span> <span class="o">=</span> <span class="n">gr_data</span><span class="p">[</span><span class="s2">&quot;doy&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+        <span class="n">v</span> <span class="o">=</span> <span class="n">gr_data</span><span class="p">[</span><span class="s2">&quot;mean_gr&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+
+        <span class="n">fit_result</span> <span class="o">=</span> <span class="n">fit_double_sigmoid</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+
+        <span class="n">result_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="p">{</span>
+                    <span class="s2">&quot;row&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+                    <span class="s2">&quot;col&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+                    <span class="s2">&quot;gup_doy&quot;</span><span class="p">:</span> <span class="n">fit_result</span><span class="p">[</span><span class="s2">&quot;t1&quot;</span><span class="p">],</span>
+                    <span class="s2">&quot;gdown_doy&quot;</span><span class="p">:</span> <span class="n">fit_result</span><span class="p">[</span><span class="s2">&quot;t2&quot;</span><span class="p">],</span>
+                    <span class="s2">&quot;gmax_doy&quot;</span><span class="p">:</span> <span class="n">fit_result</span><span class="p">[</span><span class="s2">&quot;gmax_doy&quot;</span><span class="p">],</span>
+                    <span class="s2">&quot;gmax_value&quot;</span><span class="p">:</span> <span class="n">fit_result</span><span class="p">[</span><span class="s2">&quot;gmax_value&quot;</span><span class="p">],</span>
+                    <span class="s2">&quot;fit_rmse&quot;</span><span class="p">:</span> <span class="n">fit_result</span><span class="p">[</span><span class="s2">&quot;fit_rmse&quot;</span><span class="p">],</span>
+                    <span class="s2">&quot;fit_status&quot;</span><span class="p">:</span> <span class="n">fit_result</span><span class="p">[</span><span class="s2">&quot;fit_status&quot;</span><span class="p">],</span>
+                <span class="p">}</span>
+            <span class="p">]</span>
+        <span class="p">)</span>
+
+    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">gr_data</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="c1"># Pixel-level fitting from dict of GR images</span>
+        <span class="c1"># This is a more advanced use case for spatial phenology mapping</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+            <span class="s2">&quot;Pixel-level phenology from dict of images not yet implemented. &quot;</span>
+            <span class="s2">&quot;Please provide a DataFrame with aggregated time series.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;gr_data must be DataFrame or dict, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">gr_data</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Save results if output directory specified</span>
+    <span class="k">if</span> <span class="n">output_dir</span><span class="p">:</span>
+        <span class="n">output_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span>
+        <span class="n">output_path</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">result_df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">output_path</span> <span class="o">/</span> <span class="s2">&quot;phenology_results.csv&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">result_df</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, NIES.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
