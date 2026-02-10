@@ -22,39 +22,105 @@ from yamami.parser import parse_filename
 # Default patterns for image file detection
 DEFAULT_PATTERNS = ["*.jpg", "*.jpeg", "*.tif", "*.tiff"]
 
+# Default luminance stats when image cannot be read
+_EMPTY_LUMA_STATS = {
+    "mean_luma": None,
+    "std_luma": None,
+    "p05_luma": None,
+    "p50_luma": None,
+    "p95_luma": None,
+    "saturated_ratio": None,
+}
 
-def ingest(directory: str, patterns: Optional[list[str]] = None) -> pd.DataFrame:
+
+def ingest(
+    directory: str,
+    patterns: Optional[list[str]] = None,
+    timestamp_source: str = "filename",
+    timestamp_pattern: Optional[str] = None,
+) -> pd.DataFrame:
     """
-    Scan directory and return DataFrame with image paths.
+    Scan directory for images and return DataFrame with metadata and statistics.
 
     Recursively scans the specified directory for image files matching
-    the given patterns (default: JPEG and TIFF files).
+    the given patterns, then extracts metadata and luminance statistics
+    for each image.
 
     Args:
         directory: Path to the directory to scan.
         patterns: List of glob patterns to match (e.g., ["*.jpg", "*.png"]).
                   Defaults to ["*.jpg", "*.jpeg", "*.tif", "*.tiff"].
+        timestamp_source: Source for timestamp extraction.
+                          - "filename": Extract from filename (default)
+                          - "exif": Extract from EXIF metadata
+        timestamp_pattern: Optional custom regex pattern for timestamp parsing.
+                           Only used when timestamp_source="filename".
 
     Returns:
-        pd.DataFrame: DataFrame with a 'path' column containing absolute paths
-                      to all matching image files.
+        pd.DataFrame: DataFrame with columns:
+            - path: Absolute path to the image
+            - filename: Base filename
+            - timestamp: Datetime from filename or EXIF (or None)
+            - width: Image width in pixels
+            - height: Image height in pixels
+            - filesize: File size in bytes
+            - mean_luma: Mean luminance (0-255)
+            - std_luma: Standard deviation of luminance
+            - p05_luma: 5th percentile luminance
+            - p50_luma: 50th percentile luminance
+            - p95_luma: 95th percentile luminance
+            - saturated_ratio: Ratio of saturated pixels (>=250)
+
+    Raises:
+        FileNotFoundError: If the specified directory does not exist.
+        NotADirectoryError: If the specified path is not a directory.
 
     Example:
-        >>> index = ingest("/path/to/images")
-        >>> print(index.head())
-                                                   path
-        0  /path/to/images/mrd_085_eos_vis_20200420_1805_R.JPG
-        1  /path/to/images/mrd_085_eos_vis_20200502_1605_R.JPG
+        >>> profiles = ingest("/path/to/images")
+        >>> print(profiles[["filename", "timestamp", "mean_luma"]])
     """
     if patterns is None:
         patterns = DEFAULT_PATTERNS
 
     directory_path = Path(directory)
+
+    # Validate directory exists
+    if not directory_path.exists():
+        raise FileNotFoundError(f"Directory not found: {directory}")
+    if not directory_path.is_dir():
+        raise NotADirectoryError(f"Path is not a directory: {directory}")
+
+    # Collect image paths matching patterns
+    image_paths = _collect_image_paths(directory_path, patterns)
+
+    # Build profile for each image
+    records = []
+    for path in image_paths:
+        record = _build_image_record(
+            path,
+            timestamp_source=timestamp_source,
+            timestamp_pattern=timestamp_pattern,
+        )
+        records.append(record)
+
+    return pd.DataFrame(records)
+
+
+def _collect_image_paths(directory_path: Path, patterns: list[str]) -> list[str]:
+    """
+    Collect image paths matching the given patterns.
+
+    Args:
+        directory_path: Path object for the directory to scan.
+        patterns: List of glob patterns to match.
+
+    Returns:
+        Sorted list of unique absolute paths as strings.
+    """
     image_paths = []
 
     for pattern in patterns:
         # Search recursively with case-insensitive matching
-        # First, search with the pattern as-is
         image_paths.extend(directory_path.rglob(pattern))
 
         # Also search with uppercase pattern for case-insensitive matching
@@ -63,9 +129,77 @@ def ingest(directory: str, patterns: Optional[list[str]] = None) -> pd.DataFrame
             image_paths.extend(directory_path.rglob(upper_pattern))
 
     # Remove duplicates and convert to absolute paths
-    unique_paths = sorted(set(str(p.resolve()) for p in image_paths))
+    return sorted(set(str(p.resolve()) for p in image_paths))
 
-    return pd.DataFrame({"path": unique_paths})
+
+def _build_image_record(
+    path: str,
+    timestamp_source: str,
+    timestamp_pattern: Optional[str],
+) -> dict:
+    """
+    Build a record dictionary for a single image.
+
+    Args:
+        path: Absolute path to the image file.
+        timestamp_source: Source for timestamp ("filename" or "exif").
+        timestamp_pattern: Optional regex pattern for filename parsing.
+
+    Returns:
+        Dictionary with image metadata and statistics.
+    """
+    filename = os.path.basename(path)
+
+    # Extract timestamp
+    if timestamp_source == "exif":
+        exif = extract_exif(path)
+        timestamp = _parse_exif_datetime(exif)
+    else:
+        timestamp = parse_filename(filename, pattern=timestamp_pattern)
+
+    # Get file size
+    try:
+        filesize = os.path.getsize(path)
+    except OSError:
+        filesize = None
+
+    # Read image and compute stats
+    width, height, luma_stats = _read_image_stats(path)
+
+    return {
+        "path": path,
+        "filename": filename,
+        "timestamp": timestamp,
+        "width": width,
+        "height": height,
+        "filesize": filesize,
+        **luma_stats,
+    }
+
+
+def _read_image_stats(path: str) -> tuple[Optional[int], Optional[int], dict]:
+    """
+    Read image and compute dimensions and luminance statistics.
+
+    Args:
+        path: Path to the image file.
+
+    Returns:
+        Tuple of (width, height, luma_stats). Returns (None, None, empty_stats)
+        if the image cannot be read.
+    """
+    try:
+        img = cv2.imread(path)
+        if img is not None:
+            height, width = img.shape[:2]
+            luma_stats = compute_luminance_stats(img)
+            return width, height, luma_stats
+    except (cv2.error, OSError):
+        # cv2.error: OpenCV-specific errors
+        # OSError: File system errors (permissions, etc.)
+        pass
+
+    return None, None, _EMPTY_LUMA_STATS.copy()
 
 
 def compute_luminance_stats(image: np.ndarray) -> dict:
@@ -86,6 +220,7 @@ def compute_luminance_stats(image: np.ndarray) -> dict:
             - p05_luma: 5th percentile luminance
             - p50_luma: 50th percentile (median) luminance
             - p95_luma: 95th percentile luminance
+            - saturated_ratio: Ratio of saturated pixels (>=250) for backlight detection
 
     Example:
         >>> import cv2
@@ -102,12 +237,17 @@ def compute_luminance_stats(image: np.ndarray) -> dict:
     # Flatten for statistical computations
     pixels = gray.flatten().astype(np.float64)
 
+    # Calculate saturated pixel ratio (for backlight detection)
+    saturated_count = np.sum(gray >= 250)
+    saturated_ratio = float(saturated_count / gray.size)
+
     return {
         "mean_luma": float(np.mean(pixels)),
         "std_luma": float(np.std(pixels)),
         "p05_luma": float(np.percentile(pixels, 5)),
         "p50_luma": float(np.percentile(pixels, 50)),
         "p95_luma": float(np.percentile(pixels, 95)),
+        "saturated_ratio": saturated_ratio,
     }
 
 
@@ -167,147 +307,3 @@ def _parse_exif_datetime(exif: dict) -> Optional[datetime]:
             except (ValueError, TypeError):
                 continue
     return None
-
-
-def profile(
-    index: pd.DataFrame,
-    timestamp_source: str = "filename",
-    filename_pattern: Optional[str] = None,
-) -> pd.DataFrame:
-    """
-    Profile images and return DataFrame with metadata and statistics.
-
-    For each image in the index, extracts:
-    - Timestamp from filename or EXIF data
-    - Image dimensions (width, height)
-    - File size
-    - Luminance statistics
-
-    Args:
-        index: DataFrame with 'path' column containing image paths.
-               Typically the output of ingest().
-        timestamp_source: Source for timestamp extraction.
-                          - "filename": Extract from filename (default)
-                          - "exif": Extract from EXIF metadata
-        filename_pattern: Optional custom regex pattern for filename parsing.
-                          Only used when timestamp_source="filename".
-                          See parse_filename() for pattern format.
-
-    Returns:
-        pd.DataFrame: DataFrame with columns:
-            - path: Absolute path to the image
-            - filename: Base filename
-            - site: Site identifier (from filename, if available)
-            - azimuth: Camera azimuth (from filename, if available)
-            - camera: Camera identifier (from filename, if available)
-            - band: Band identifier (from filename, if available)
-            - timestamp: Datetime from filename or EXIF (or None)
-            - width: Image width in pixels
-            - height: Image height in pixels
-            - filesize: File size in bytes
-            - mean_luma: Mean luminance (0-255)
-            - std_luma: Standard deviation of luminance
-            - p05_luma: 5th percentile luminance
-            - p50_luma: 50th percentile luminance
-            - p95_luma: 95th percentile luminance
-
-    Example:
-        >>> index = ingest("/path/to/images")
-        >>> profiles = profile(index)
-        >>> print(profiles[["filename", "timestamp", "mean_luma"]])
-    """
-    columns = [
-        "path",
-        "filename",
-        "site",
-        "azimuth",
-        "camera",
-        "band",
-        "timestamp",
-        "width",
-        "height",
-        "filesize",
-        "mean_luma",
-        "std_luma",
-        "p05_luma",
-        "p50_luma",
-        "p95_luma",
-    ]
-
-    if index.empty:
-        return pd.DataFrame(columns=columns)
-
-    records = []
-
-    for _, row in index.iterrows():
-        path = row["path"]
-        filename = os.path.basename(path)
-
-        # Extract timestamp
-        site = None
-        azimuth = None
-        camera = None
-        band = None
-
-        if timestamp_source == "exif":
-            exif = extract_exif(path)
-            timestamp = _parse_exif_datetime(exif)
-        else:
-            # Default: filename
-            parsed = parse_filename(filename, pattern=filename_pattern)
-            if parsed is not None:
-                timestamp = parsed.get("timestamp")
-                site = parsed.get("site")
-                azimuth = parsed.get("azimuth")
-                camera = parsed.get("camera")
-                band = parsed.get("band")
-            else:
-                timestamp = None
-
-        # Get file size
-        try:
-            filesize = os.path.getsize(path)
-        except OSError:
-            filesize = None
-
-        # Read image and compute stats
-        try:
-            img = cv2.imread(path)
-            if img is not None:
-                height, width = img.shape[:2]
-                luma_stats = compute_luminance_stats(img)
-            else:
-                width, height = None, None
-                luma_stats = {
-                    "mean_luma": None,
-                    "std_luma": None,
-                    "p05_luma": None,
-                    "p50_luma": None,
-                    "p95_luma": None,
-                }
-        except Exception:
-            width, height = None, None
-            luma_stats = {
-                "mean_luma": None,
-                "std_luma": None,
-                "p05_luma": None,
-                "p50_luma": None,
-                "p95_luma": None,
-            }
-
-        record = {
-            "path": path,
-            "filename": filename,
-            "site": site,
-            "azimuth": azimuth,
-            "camera": camera,
-            "band": band,
-            "timestamp": timestamp,
-            "width": width,
-            "height": height,
-            "filesize": filesize,
-            **luma_stats,
-        }
-        records.append(record)
-
-    return pd.DataFrame(records)

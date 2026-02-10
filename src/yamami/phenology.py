@@ -67,12 +67,12 @@ def _double_sigmoid(
 
 def _compute_gr_image(image: np.ndarray) -> np.ndarray:
     """
-    Compute greenness ratio for an RGB image.
+    Compute greenness ratio for a BGR image (OpenCV format).
 
     GR = G / (R + G + B)
 
     Args:
-        image: RGB image with shape (H, W, 3), values in range [0, 255].
+        image: BGR image with shape (H, W, 3), values in range [0, 255].
 
     Returns:
         Greenness ratio image with shape (H, W), values in range [0, 1].
@@ -108,7 +108,9 @@ def gr(
     optionally aggregating to daily maximum values.
 
     Args:
-        profile: DataFrame with 'filepath' and 'timestamp' columns.
+        profile: DataFrame with 'timestamp' column and either 'filepath'
+            or 'path' column (if 'path' is present, it is automatically
+            renamed to 'filepath').
         aoi_mask: Boolean mask array defining the area of interest.
             Pixels with True are included in the analysis.
         daily_max: If True, aggregate multiple observations per day to

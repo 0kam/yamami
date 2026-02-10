@@ -1,7 +1,7 @@
 """
 Filename parser for yamami image files.
 
-Extracts site/camera metadata and datetime from filenames.
+Extracts datetime from filenames using configurable patterns.
 """
 
 import os
@@ -9,19 +9,15 @@ import re
 from datetime import datetime
 from typing import Optional
 
-DEFAULT_METADATA_PATTERN = re.compile(
-    r"(?P<site>[^_]+)_(?P<azimuth>[^_]+)_(?P<camera>[^_]+)_(?P<band>[^_]+)_(?P<date>\d{8})_(?P<time>\d{4})(?:_|\.)"
-)
-
 # Default patterns for datetime extraction (priority order)
 DEFAULT_PATTERNS = [
-    # Metadata pattern: site_azimuth_camera_band_yyyymmdd_hhmm
-    DEFAULT_METADATA_PATTERN,
     # Pattern 1: YYYYMMDD_HHMM (e.g., 20200420_1805)
     re.compile(r"(?P<date>\d{8})_(?P<time>\d{4})"),
-    # Pattern 2: YYYY-MM-DD_HH-MM (e.g., 2020-04-20_18-05)
+    # Pattern 2: YYYY-MM-DD_HH-MM-SS (e.g., 2020-04-20_18-05-00)
+    re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})_(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})"),
+    # Pattern 3: YYYY-MM-DD_HH-MM (e.g., 2020-04-20_18-05)
     re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})_(?P<hour>\d{2})-(?P<minute>\d{2})"),
-    # Pattern 3: YYYYMMDD only (e.g., 20200420, time defaults to 00:00)
+    # Pattern 4: YYYYMMDD only (e.g., 20200420, time defaults to 00:00)
     re.compile(r"(?P<date>\d{8})(?!\d)"),
 ]
 
@@ -29,32 +25,25 @@ DEFAULT_PATTERNS = [
 def parse_filename(
     filename: Optional[str],
     pattern: Optional[str] = None,
-) -> Optional[dict]:
+) -> Optional[datetime]:
     """
-    Extract metadata and datetime from a filename.
-
-    Parses the filename to extract site/camera metadata and datetime
-    information using either a custom pattern or auto-detection of
-    common patterns.
+    Extract datetime from a filename.
 
     Args:
         filename: The filename to parse. Can include full path (basename
                   will be extracted automatically). None or empty returns None.
         pattern: Optional custom regex pattern with named groups.
                  Supported group names:
-                 - 'site', 'azimuth', 'camera', 'band'
                  - 'date' + 'time': YYYYMMDD and HHMM format
-                 - 'year', 'month', 'day', 'hour', 'minute': Individual components
+                 - 'year', 'month', 'day', 'hour', 'minute', 'second': Individual components
                  If not provided, auto-detects common patterns.
 
     Returns:
-        dict or None: Parsed metadata with keys:
-            - site, azimuth, camera, band (may be None)
-            - timestamp (datetime)
+        datetime or None: Extracted timestamp, or None if parsing fails.
 
     Default patterns (priority order):
-        1. site_azimuth_camera_band_YYYYMMDD_HHMM (yamami convention)
-        2. YYYYMMDD_HHMM
+        1. YYYYMMDD_HHMM
+        2. YYYY-MM-DD_HH-MM-SS
         3. YYYY-MM-DD_HH-MM
         4. YYYYMMDD only (time defaults to 00:00)
     """
@@ -81,13 +70,7 @@ def parse_filename(
             try:
                 dt = _extract_datetime(groups)
                 if dt is not None:
-                    return {
-                        "site": groups.get("site"),
-                        "azimuth": groups.get("azimuth"),
-                        "camera": groups.get("camera"),
-                        "band": groups.get("band"),
-                        "timestamp": dt,
-                    }
+                    return dt
             except (ValueError, KeyError):
                 continue
 

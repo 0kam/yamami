@@ -1,10 +1,12 @@
 """
 Image alignment module for yamami.
 
-Provides functions for detecting camera shifts, segmenting time series
-into stable intervals, and aligning images using feature matching.
+Provides round-based image alignment with lens distortion correction
+and ridgeline-based validation. Leverages segment/shift information
+from ridge_qc (Step 3) to select anchor candidates per segment.
 """
 
+import json
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -12,6 +14,7 @@ from typing import Optional
 import cv2
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize as scipy_minimize
 
 from yamami.logging import get_logger
 
@@ -46,319 +49,1397 @@ _DEFAULT_RESIZE_HEAVY = 640
 _DEFAULT_LOWE_RATIO = 0.7
 
 
+# =============================================================================
+# Public API
+# =============================================================================
+
+
 def align(
-    profile: pd.DataFrame,
-    ref: str,
-    method: str = "roma",
-    max_rounds: int = 3,
+    df: pd.DataFrame,
+    target_image: str,
+    masks_dir: str,
+    method: str = "superpoint-lightglue",
     output_dir: Optional[str] = None,
     device: str = "cpu",
     resize: Optional[int] = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, str]:
-    """
-    Detect camera shifts and align images.
+    max_rounds: int = 5,
+    min_ransac_inliers: int = 20,
+    max_rmse: float = 5.0,
+    ridge_validation: bool = True,
+    estimate_distortion: str = "global",
+    grid_size: int = 100,
+    ransac_thresh: float = 10.0,
+) -> pd.DataFrame:
+    """Round-based image alignment with lens distortion correction.
 
-    This function detects camera position changes in a time series of images,
-    segments the series into stable intervals, and aligns images to a
-    reference image using feature matching.
-
-    Supported matching methods:
-        - OpenCV methods: "akaze", "sift"
-        - IMM methods (requires imm package): "roma", "loftr", "sift-lightglue",
-          "superpoint-lightglue", "minima-superpoint-lightglue", "tiny-roma",
-          "minima-roma", "minima-loftr", "ufm", "rdd", "master"
-
-    Memory-intensive methods (roma, loftr, etc.) are automatically resized to
-    640px unless resize is explicitly specified. LightGlue-based methods can
-    handle full-resolution images.
+    Uses segment and ridge information from ridge_qc (Step 3) to select
+    anchor candidates, estimate lens distortion, and iteratively align
+    all segments to the target image coordinate system.
 
     Args:
-        profile: DataFrame with 'filepath' and 'timestamp' columns.
-        ref: Path to reference image.
-        method: Matching method to use. Default is "roma".
-        max_rounds: Maximum rounds for iterative alignment. Default is 3.
-        output_dir: Directory to save aligned images.
-        device: Device for IMM methods ("cpu" or "cuda"). Default is "cpu".
-        resize: Resize images to this size for IMM methods.
-            None means auto-resize for heavy methods.
+        df: DataFrame from ridge_qc with ``segment_id``,
+            ``ridge_match_success``, ``ridge_blue_ratio``, etc.
+        target_image: Path to the target (reference) image.
+        masks_dir: Directory containing SAM mask .npz files.
+        method: Feature matching method (default ``"superpoint-lightglue"``).
+        output_dir: Base output directory. Aligned images are saved under
+            ``<output_dir>/aligned/``.
+        device: Device for IMM methods (``"cpu"`` or ``"cuda"``).
+        resize: Resize for IMM methods (None = auto).
+        max_rounds: Maximum alignment rounds.
+        min_ransac_inliers: Minimum RANSAC inlier count (Layer 1).
+        max_rmse: Maximum reprojection RMSE in pixels (Layer 2).
+        ridge_validation: Whether to use ridgeline validation (Layer 3).
+        estimate_distortion: Lens distortion estimation mode.
+            ``"global"`` estimates one set of parameters from all anchors
+            (assumes same camera).  ``"per_segment"`` estimates distortion
+            independently for each segment.  ``"off"`` disables distortion
+            estimation entirely.
+        grid_size: Grid cell size in pixels for spatial thinning of matches.
+            Set to 0 to disable.
+        ransac_thresh: RANSAC reprojection threshold in pixels for
+            homography estimation.
 
     Returns:
-        tuple: A tuple containing:
-            - segments (pd.DataFrame): DataFrame with segment_id, start_idx, end_idx.
-            - warp_params (pd.DataFrame): DataFrame with filepath and warp parameters,
-              including match_status and num_matches.
-            - aligned_dir (str): Path to directory containing aligned images.
-
-    Example:
-        >>> segments, warp_params, aligned_dir = align(profile, ref="ref.jpg")
-        >>> segments.columns
-        Index(['segment_id', 'start_idx', 'end_idx', 'anchor_filepath'])
-
-        >>> # Using AKAZE (no external dependencies)
-        >>> segments, warp_params, _ = align(profile, ref="ref.jpg", method="akaze")
-
-        >>> # Using roma with GPU
-        >>> segments, warp_params, _ = align(
-        ...     profile, ref="ref.jpg", method="roma", device="cuda"
-        ... )
+        DataFrame with added columns: ``align_status``, ``align_rmse``,
+        ``align_num_matches``, ``align_anchor``, ``align_round``,
+        ``align_method``.
     """
-    # Create output directory
+    from yamami.ridgeline import (
+        compute_blue_ratio,
+        detect_ridgeline,
+        get_sam_ridge,
+        load_mask,
+        match_ridgelines_ransac,
+    )
+
+    target_path = Path(target_image)
+    masks_dir = Path(masks_dir)
+
     if output_dir is None:
-        output_dir = "aligned"
-    aligned_dir = str(Path(output_dir).absolute())
-    Path(aligned_dir).mkdir(parents=True, exist_ok=True)
+        output_dir = "."
+    aligned_dir = Path(output_dir) / "aligned"
+    aligned_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Detect shifts using phase correlation
-    logger.info("Detecting camera shifts...")
-    shifts = _detect_all_shifts(profile, ref)
+    result_df = df.copy()
 
-    # Step 2: Segment time series
-    logger.info("Segmenting time series...")
-    segments_list = segment_timeseries(shifts, threshold=5.0)
+    # --- Detect target ridgeline for Layer 3 validation ---
+    target_img = cv2.imread(str(target_path))
+    if target_img is None:
+        raise FileNotFoundError(f"Target image not found: {target_path}")
 
-    # Step 3: Select anchor images
-    logger.info("Selecting anchor images...")
-    anchors = select_anchor_images(segments_list, profile)
+    img_h, img_w = target_img.shape[:2]
+    target_ridge = None
 
-    # Step 4: Match anchors to reference and compute homographies
-    logger.info(f"Matching to reference using {method} method...")
-    warp_data = _match_all_to_reference(
-        profile, ref, anchors, method, device=device, resize=resize
-    )
+    if ridge_validation:
+        target_basename = target_path.stem
+        target_sam_ridge = get_sam_ridge(
+            masks_dir / f"{target_basename}_mountain.npz"
+        )
+        target_sky_mask = load_mask(masks_dir / f"{target_basename}_sky.npz")
+        target_cloud_mask = load_mask(
+            masks_dir / f"{target_basename}_cloud.npz"
+        )
+        target_ridge, _, target_blue_ratio = detect_ridgeline(
+            target_img,
+            target_sam_ridge,
+            target_sky_mask,
+            target_cloud_mask,
+        )
+    else:
+        target_blue_ratio = 0.33
 
-    # Step 5: Apply warps and save aligned images
-    logger.info("Applying warps...")
-    _apply_and_save_warps(profile, warp_data, aligned_dir)
+    # --- Select anchor candidates per segment ---
+    segment_ids = sorted(result_df["segment_id"].dropna().unique())
+    segment_candidates = {}
 
-    # Build result DataFrames
-    segments = pd.DataFrame(segments_list)
-    warp_params = pd.DataFrame(warp_data)
-
-    logger.info(
-        f"Alignment complete: {len(segments)} segments, "
-        f"{len(warp_params)} images aligned"
-    )
-
-    return segments, warp_params, aligned_dir
-
-
-def phase_correlation_change_detect(
-    img1: np.ndarray, img2: np.ndarray
-) -> tuple[float, float]:
-    """
-    Detect shift between two images using phase correlation.
-
-    Uses FFT-based phase correlation to estimate the translation
-    between two images.
-
-    Args:
-        img1: First grayscale image.
-        img2: Second grayscale image (same size as img1).
-
-    Returns:
-        tuple: (dx, dy) shift in pixels from img1 to img2.
-    """
-    # Ensure images are float32
-    img1_float = np.float32(img1)
-    img2_float = np.float32(img2)
-
-    # Compute phase correlation
-    shift, _ = cv2.phaseCorrelate(img1_float, img2_float)
-
-    return (shift[0], shift[1])
-
-
-def segment_timeseries(
-    shifts: np.ndarray, threshold: float = 5.0
-) -> list[dict]:
-    """
-    Segment time series into stable intervals based on cumulative shifts.
-
-    Detects change points where the cumulative shift exceeds the threshold
-    and creates segments representing stable camera positions.
-
-    Args:
-        shifts: Array of shape (N, 2) with (dx, dy) shifts for each frame.
-        threshold: Threshold for detecting a significant shift change.
-
-    Returns:
-        list[dict]: List of segment dictionaries with keys:
-            - segment_id: Integer segment identifier.
-            - start_idx: Start index in the time series.
-            - end_idx: End index in the time series.
-    """
-    n = len(shifts)
-    if n == 0:
-        return []
-
-    segments = []
-    current_start = 0
-    segment_id = 0
-
-    # Calculate cumulative shifts
-    cumulative = np.cumsum(shifts, axis=0)
-
-    for i in range(1, n):
-        # Check if shift from segment start exceeds threshold
-        shift_magnitude = np.sqrt(
-            (cumulative[i, 0] - cumulative[current_start, 0]) ** 2
-            + (cumulative[i, 1] - cumulative[current_start, 1]) ** 2
+    for seg_id in segment_ids:
+        candidates = _select_anchor_candidates(
+            result_df, int(seg_id), target_blue_ratio,
+        )
+        segment_candidates[int(seg_id)] = candidates
+        logger.info(
+            f"Segment {int(seg_id)}: {len(candidates)} anchor candidates"
         )
 
-        if shift_magnitude > threshold:
-            # End current segment
-            segments.append(
-                {
-                    "segment_id": segment_id,
-                    "start_idx": current_start,
-                    "end_idx": i - 1,
-                }
+    # --- Detect target segment (skip alignment for it) ---
+    target_segment_id: Optional[int] = None
+    target_name = target_path.name
+    for seg_id in segment_ids:
+        seg_df = result_df[result_df["segment_id"] == seg_id]
+        seg_names = seg_df["path"].apply(lambda p: Path(p).name)
+        if target_name in seg_names.values:
+            target_segment_id = int(seg_id)
+            segment_candidates.pop(target_segment_id, None)
+            logger.info(
+                f"Segment {target_segment_id}: contains target image, "
+                "skipping alignment (identity)"
             )
-            segment_id += 1
-            current_start = i
+            break
 
-    # Add final segment
-    segments.append(
-        {
-            "segment_id": segment_id,
-            "start_idx": current_start,
-            "end_idx": n - 1,
-        }
+    # --- Estimate lens distortion ---
+    # seg_maps: {segment_id: (map_x, map_y)} — per-segment distortion maps
+    # distortion_params_dict: {segment_id: params} — for saving to JSON
+    seg_maps: dict[int, tuple[Optional[np.ndarray], Optional[np.ndarray]]] = {}
+    distortion_params_dict: dict[int, Optional[np.ndarray]] = {}
+
+    if estimate_distortion == "global":
+        # Estimate once from all anchors
+        all_anchor_paths = []
+        for cands in segment_candidates.values():
+            all_anchor_paths.extend([c["path"] for c in cands])
+
+        if len(all_anchor_paths) > 0:
+            params, mx, my = _estimate_lens_distortion(
+                all_anchor_paths,
+                str(target_path),
+                method=method,
+                device=device,
+                resize=resize,
+                img_shape=(img_h, img_w),
+            )
+            for seg_id in segment_candidates:
+                seg_maps[seg_id] = (mx, my)
+                distortion_params_dict[seg_id] = params
+
+    elif estimate_distortion == "per_segment":
+        # Estimate independently per segment
+        for seg_id, cands in segment_candidates.items():
+            anchor_paths = [c["path"] for c in cands]
+            if len(anchor_paths) == 0:
+                seg_maps[seg_id] = (None, None)
+                distortion_params_dict[seg_id] = None
+                continue
+
+            params, mx, my = _estimate_lens_distortion(
+                anchor_paths,
+                str(target_path),
+                method=method,
+                device=device,
+                resize=resize,
+                img_shape=(img_h, img_w),
+            )
+            seg_maps[seg_id] = (mx, my)
+            distortion_params_dict[seg_id] = params
+
+    elif estimate_distortion != "off":
+        raise ValueError(
+            f"Unknown estimate_distortion '{estimate_distortion}'. "
+            "Use 'global', 'per_segment', or 'off'."
+        )
+
+    # --- Round-based alignment ---
+    segment_results = _round_based_alignment(
+        result_df,
+        str(target_path),
+        segment_candidates,
+        method=method,
+        device=device,
+        resize=resize,
+        max_rounds=max_rounds,
+        min_ransac_inliers=min_ransac_inliers,
+        max_rmse=max_rmse,
+        ridge_validation=ridge_validation,
+        target_ridge=target_ridge,
+        masks_dir=masks_dir,
+        aligned_dir=str(aligned_dir),
+        seg_maps=seg_maps,
+        grid_size=grid_size,
+        ransac_thresh=ransac_thresh,
     )
 
-    return segments
+    # --- Register target segment as identity (no warp needed) ---
+    if target_segment_id is not None:
+        H_identity = np.eye(3, dtype=np.float64)
+        segment_results[target_segment_id] = {
+            "status": "success",
+            "H": H_identity,
+            "rmse": 0.0,
+            "num_matches": 0,
+            "anchor": target_name,
+            "round": 0,
+            "method": "identity",
+        }
+        # Copy images as-is (no distortion correction, no warp)
+        _warp_segment_images(
+            result_df,
+            target_segment_id,
+            H_identity,
+            None,
+            None,
+            str(aligned_dir),
+        )
+
+    # --- Apply warps to all images in successful segments ---
+    for seg_id, seg_result in segment_results.items():
+        if seg_id == target_segment_id:
+            continue  # Already handled above
+        if seg_result["status"] == "success":
+            mx, my = seg_maps.get(seg_id, (None, None))
+            _warp_segment_images(
+                result_df,
+                seg_id,
+                seg_result["H"],
+                mx,
+                my,
+                str(aligned_dir),
+            )
+
+    # --- Save match visualizations ---
+    from yamami.viz import plot_match_result
+
+    match_viz_dir = aligned_dir / "match_viz"
+    for seg_id, sr in segment_results.items():
+        pts_src_inlier = sr.get("pts_src_inlier")
+        pts_dst_inlier = sr.get("pts_dst_inlier")
+        if pts_src_inlier is None or pts_dst_inlier is None:
+            continue
+        if sr.get("H") is None:
+            continue
+
+        # Find anchor path from segment candidates
+        anchor_path = None
+        for c in segment_candidates.get(seg_id, []):
+            if Path(c["path"]).name == sr["anchor"]:
+                anchor_path = c["path"]
+                break
+        if anchor_path is None:
+            continue
+
+        ref_path_used = sr.get("ref_path", str(target_path))
+        status_tag = "FAILED" if sr["status"] != "success" else ""
+        fail_reason = sr.get("fail_reason", "")
+        viz_path = str(match_viz_dir / f"seg{seg_id}_match.jpg")
+
+        plot_match_result(
+            anchor_path=anchor_path,
+            ref_path=ref_path_used,
+            pts_src=pts_src_inlier,
+            pts_dst=pts_dst_inlier,
+            H=sr["H"],
+            segment_id=seg_id,
+            round_num=sr.get("round", -1),
+            rmse=sr.get("rmse", 0.0),
+            num_matches=sr.get("num_matches", 0),
+            method=sr.get("method", method),
+            output_path=viz_path,
+            status_tag=status_tag,
+            fail_reason=fail_reason,
+        )
+        logger.info(f"Saved match visualization: {viz_path}")
+
+    # --- Write output columns ---
+    align_status = []
+    align_rmse = []
+    align_num_matches = []
+    align_anchor = []
+    align_round = []
+    align_method = []
+
+    for _, row in result_df.iterrows():
+        seg_id = row.get("segment_id")
+        if pd.notna(seg_id) and int(seg_id) in segment_results:
+            sr = segment_results[int(seg_id)]
+            align_status.append(sr["status"])
+            align_rmse.append(sr.get("rmse", np.nan))
+            align_num_matches.append(sr.get("num_matches", 0))
+            align_anchor.append(sr.get("anchor", ""))
+            align_round.append(sr.get("round", -1))
+            align_method.append(sr.get("method", method))
+        else:
+            align_status.append("failed")
+            align_rmse.append(np.nan)
+            align_num_matches.append(0)
+            align_anchor.append("")
+            align_round.append(-1)
+            align_method.append(method)
+
+    result_df["align_status"] = align_status
+    result_df["align_rmse"] = align_rmse
+    result_df["align_num_matches"] = align_num_matches
+    result_df["align_anchor"] = align_anchor
+    result_df["align_round"] = align_round
+    result_df["align_method"] = align_method
+
+    # --- Save alignment parameters ---
+    params_data = {}
+    for seg_id, sr in segment_results.items():
+        params_data[str(seg_id)] = {
+            "status": sr["status"],
+            "H": sr["H"].tolist() if sr.get("H") is not None else None,
+            "rmse": sr.get("rmse"),
+            "num_matches": sr.get("num_matches"),
+            "anchor": sr.get("anchor"),
+            "round": sr.get("round"),
+        }
+    for seg_id, dp in distortion_params_dict.items():
+        if dp is not None:
+            seg_key = str(seg_id)
+            if seg_key in params_data:
+                params_data[seg_key]["distortion_params"] = dp.tolist()
+            else:
+                params_data[f"distortion_{seg_key}"] = dp.tolist()
+    params_data["estimate_distortion"] = estimate_distortion
+
+    params_path = aligned_dir / "alignment_params.json"
+    with open(params_path, "w") as f:
+        json.dump(params_data, f, indent=2, default=str)
+
+    n_success = sum(
+        1 for s in segment_results.values() if s["status"] == "success"
+    )
+    logger.info(
+        f"Alignment complete: {n_success}/{len(segment_results)} segments "
+        f"aligned, saved to {aligned_dir}"
+    )
+
+    return result_df
 
 
-def select_anchor_images(
-    segments: list[dict], profile: pd.DataFrame
+# =============================================================================
+# Anchor candidate selection
+# =============================================================================
+
+
+def _select_anchor_candidates(
+    df: pd.DataFrame,
+    segment_id: int,
+    target_blue_ratio: float,
+    top_n: int = 3,
 ) -> list[dict]:
-    """
-    Select the best anchor image for each segment.
+    """Select best anchor candidates for a segment.
 
-    Chooses the image with the best brightness (closest to 0.6) within
-    each segment as the anchor for alignment.
+    Scores images with ``ridge_match_success == True`` using:
+      - blue_ratio proximity to target (weight 0.5)
+      - timestamp proximity to noon (weight 0.2)
+      - middle of segment preference (weight 0.3)
 
     Args:
-        segments: List of segment dictionaries.
-        profile: DataFrame with 'filepath' and optionally 'brightness' columns.
+        df: DataFrame with ridge_qc columns.
+        segment_id: Segment to select from.
+        target_blue_ratio: Blue ratio of the target image.
+        top_n: Number of candidates to return.
 
     Returns:
-        list[dict]: List of anchor dictionaries with keys:
-            - segment_id: Segment identifier.
-            - filepath: Path to anchor image.
-            - idx: Index in profile.
+        List of dicts with ``path``, ``score``, ``blue_ratio``.
     """
-    anchors = []
+    seg_df = df[df["segment_id"] == segment_id].copy()
+    matched = seg_df[seg_df["ridge_match_success"] == True]  # noqa: E712
 
-    for seg in segments:
-        start_idx = seg["start_idx"]
-        end_idx = seg["end_idx"]
+    if len(matched) == 0:
+        # Fallback: use all usable images in segment
+        if "is_usable" in seg_df.columns:
+            matched = seg_df[seg_df["is_usable"] == True]  # noqa: E712
+        if len(matched) == 0:
+            matched = seg_df
 
-        # Get images in this segment
-        segment_profile = profile.iloc[start_idx : end_idx + 1]
+    scores = []
+    for idx, row in matched.iterrows():
+        # Blue ratio proximity score (0-1, higher is better)
+        br = row.get("ridge_blue_ratio", 0.33)
+        if pd.isna(br):
+            br = 0.33
+        br_score = 1.0 - min(abs(br - target_blue_ratio) / 0.2, 1.0)
 
-        if "brightness" in segment_profile.columns:
-            # Select image with brightness closest to 0.6 (optimal)
-            target_brightness = 0.6
-            brightness_diff = (segment_profile["brightness"] - target_brightness).abs()
-            best_idx = brightness_diff.idxmin()
+        # Noon proximity score (0-1)
+        noon_score = 0.5  # default
+        ts = row.get("timestamp")
+        if pd.notna(ts):
+            try:
+                ts_parsed = pd.Timestamp(ts)
+                hour = ts_parsed.hour + ts_parsed.minute / 60.0
+                noon_score = 1.0 - min(abs(hour - 12.0) / 6.0, 1.0)
+            except Exception:
+                pass
+
+        # Position in segment score (prefer middle)
+        seg_indices = matched.index.tolist()
+        if len(seg_indices) > 1:
+            pos = seg_indices.index(idx) / (len(seg_indices) - 1)
+            mid_score = 1.0 - abs(pos - 0.5) * 2.0
         else:
-            # Default to middle image
-            best_idx = segment_profile.index[len(segment_profile) // 2]
+            mid_score = 1.0
 
-        anchors.append(
+        score = 0.5 * br_score + 0.2 * noon_score + 0.3 * mid_score
+        scores.append(
             {
-                "segment_id": seg["segment_id"],
-                "filepath": profile.loc[best_idx, "filepath"],
-                "idx": best_idx,
+                "path": row["path"],
+                "score": score,
+                "blue_ratio": br,
+                "idx": idx,
             }
         )
 
-    return anchors
+    scores.sort(key=lambda x: x["score"], reverse=True)
+    return scores[:top_n]
+
+
+# =============================================================================
+# Lens distortion estimation
+# =============================================================================
+
+
+def _distort_points(
+    pts: np.ndarray,
+    params: np.ndarray,
+    img_width: int,
+    img_height: int,
+) -> np.ndarray:
+    """Apply lens distortion model to points.
+
+    Brown-Conrady distortion model with 8 parameters:
+    k1-k3 (radial numerator), p1-p2 (tangential), k4-k6 (radial denominator).
+
+    Args:
+        pts: Points array of shape (N, 2).
+        params: 8-element distortion parameter array.
+        img_width: Image width.
+        img_height: Image height.
+
+    Returns:
+        Distorted points array of shape (N, 2).
+    """
+    k1, k2, k3, p1, p2, k4, k5, k6 = params
+
+    centre = np.array(
+        [(img_width - 1) / 2.0, (img_height - 1) / 2.0], dtype=np.float64
+    )
+    x1 = (pts[:, 0] - centre[0]) / centre[0]
+    y1 = (img_height / img_width) * (pts[:, 1] - centre[1]) / centre[1]
+
+    r2 = x1**2 + y1**2
+    r4 = r2**2
+    r6 = r2 * r4
+
+    radial_num = 1 + k1 * r2 + k2 * r4 + k3 * r6
+    radial_den = 1 + k4 * r2 + k5 * r4 + k6 * r6
+
+    x1_d = x1 * radial_num / radial_den + 2 * p1 * x1 * y1 + p2 * (r2 + 2 * x1**2)
+    y1_d = y1 * radial_num / radial_den + 2 * p2 * x1 * y1 + p1 * (r2 + 2 * y1**2)
+
+    x1_d = x1_d * centre[0] + centre[0]
+    y1_d = (img_width / img_height) * y1_d * centre[1] + centre[1]
+
+    return np.stack([x1_d, y1_d], axis=1)
+
+
+def _estimate_lens_distortion(
+    anchor_paths: list[str],
+    target_path: str,
+    method: str,
+    device: str,
+    resize: Optional[int],
+    img_shape: tuple[int, int],
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+    """Estimate lens distortion from anchor-target match points.
+
+    Collects feature matches from multiple anchor images against the
+    target, then optimizes Brown-Conrady distortion parameters to
+    minimise the mean per-anchor reprojection error.  Each anchor gets
+    its own homography so that different camera positions (segments)
+    do not interfere with each other.
+
+    Args:
+        anchor_paths: List of anchor image paths.
+        target_path: Target image path.
+        method: Matching method.
+        device: Compute device.
+        resize: Resize parameter.
+        img_shape: (height, width) of images.
+
+    Returns:
+        Tuple of (distortion_params, map_x, map_y). All None if
+        estimation is skipped or fails.
+    """
+    img_h, img_w = img_shape
+
+    # Collect match points per anchor (keep separate)
+    anchor_point_pairs: list[tuple[np.ndarray, np.ndarray]] = []
+
+    for anchor_path in anchor_paths:
+        try:
+            pts_src, pts_dst = _match_images(
+                anchor_path, target_path, method=method, device=device,
+                resize=resize,
+            )
+            if len(pts_src) >= 10:
+                anchor_point_pairs.append(
+                    (pts_src.astype(np.float64), pts_dst.astype(np.float64))
+                )
+        except Exception as e:
+            logger.debug(f"Distortion estimation: skipping {anchor_path}: {e}")
+
+    if len(anchor_point_pairs) == 0:
+        logger.info("Distortion estimation: no match points, skipping")
+        return None, None, None
+
+    total_pts = sum(len(p[0]) for p in anchor_point_pairs)
+    logger.info(
+        f"Distortion estimation: {total_pts} total match points "
+        f"from {len(anchor_point_pairs)} anchors"
+    )
+
+    if total_pts < 30:
+        logger.info("Distortion estimation: insufficient points, skipping")
+        return None, None, None
+
+    # Baseline: mean per-anchor RMSE (homography only, no distortion)
+    base_rmses = []
+    for pts_src, pts_dst in anchor_point_pairs:
+        H_base, base_mask = estimate_homography(
+            pts_src.astype(np.float32), pts_dst.astype(np.float32),
+        )
+        if H_base is None:
+            continue
+        rmse, _ = _compute_rmse(H_base, pts_src, pts_dst, inlier_mask=base_mask)
+        base_rmses.append(rmse)
+
+    if len(base_rmses) == 0:
+        return None, None, None
+
+    base_rmse = float(np.mean(base_rmses))
+    logger.info(f"Distortion estimation: baseline RMSE = {base_rmse:.2f} px")
+
+    # Optimize distortion parameters (shared distortion, per-anchor H)
+    def cost(params):
+        rmses = []
+        for pts_src, pts_dst in anchor_point_pairs:
+            pts_d = _distort_points(pts_src, params, img_w, img_h)
+            H_opt, mask_opt = estimate_homography(
+                pts_d.astype(np.float32), pts_dst.astype(np.float32),
+            )
+            if H_opt is None:
+                rmses.append(1e10)
+                continue
+            rmse, _ = _compute_rmse(H_opt, pts_d, pts_dst, inlier_mask=mask_opt)
+            rmses.append(rmse)
+        return float(np.mean(rmses))
+
+    try:
+        result = scipy_minimize(
+            cost,
+            x0=np.zeros(8),
+            method="Nelder-Mead",
+            options={"maxiter": 2000, "xatol": 1e-8, "fatol": 1e-6},
+        )
+        opt_params = result.x
+        opt_rmse = result.fun
+    except Exception as e:
+        logger.warning(f"Distortion optimization failed: {e}")
+        return None, None, None
+
+    # Check if distortion correction improves RMSE
+    improvement = base_rmse - opt_rmse
+    logger.info(
+        f"Distortion estimation: optimized RMSE = {opt_rmse:.2f} px "
+        f"(improvement = {improvement:.2f} px)"
+    )
+
+    if improvement < 0.1:
+        logger.info("Distortion estimation: no significant improvement, skipping")
+        return None, None, None
+
+    # Build remap tables (inverse distortion)
+    map_x, map_y = np.meshgrid(
+        np.arange(img_w, dtype=np.float32),
+        np.arange(img_h, dtype=np.float32),
+    )
+    grid = np.stack([map_x.flatten(), map_y.flatten()], axis=1)
+
+    inv_params = -opt_params
+    grid_d = _distort_points(grid, inv_params, img_w, img_h)
+    map_x_d = grid_d[:, 0].reshape(img_h, img_w).astype(np.float32)
+    map_y_d = grid_d[:, 1].reshape(img_h, img_w).astype(np.float32)
+
+    logger.info("Distortion estimation: remap tables created")
+    return opt_params, map_x_d, map_y_d
+
+
+# =============================================================================
+# RMSE computation
+# =============================================================================
+
+
+def _compute_rmse(
+    H: np.ndarray,
+    pts_src: np.ndarray,
+    pts_dst: np.ndarray,
+    inlier_mask: Optional[np.ndarray] = None,
+) -> tuple[float, int]:
+    """Compute reprojection RMSE for a homography.
+
+    When *inlier_mask* is provided (from RANSAC), RMSE is computed only
+    over inlier points.  Otherwise RMSE is computed over all points.
+
+    Args:
+        H: 3x3 homography matrix.
+        pts_src: Source points (N, 2).
+        pts_dst: Destination points (N, 2).
+        inlier_mask: Boolean array of length N indicating RANSAC inliers.
+
+    Returns:
+        (rmse, inlier_count) — RMSE over inliers and the inlier count.
+    """
+    n = len(pts_src)
+    if n == 0:
+        return float("inf"), 0
+
+    ones = np.ones((n, 1), dtype=np.float64)
+    pts_h = np.hstack([pts_src.astype(np.float64), ones])
+    projected = (H @ pts_h.T).T
+    w = projected[:, 2:]
+    w[w == 0] = 1e-10
+    projected_xy = projected[:, :2] / w
+
+    errors = np.sqrt(
+        np.sum((projected_xy - pts_dst.astype(np.float64)) ** 2, axis=1)
+    )
+
+    if inlier_mask is not None:
+        inlier_errors = errors[inlier_mask]
+        inlier_count = int(np.sum(inlier_mask))
+    else:
+        inlier_errors = errors
+        inlier_count = n
+
+    if len(inlier_errors) == 0:
+        return float("inf"), 0
+
+    rmse = float(np.sqrt(np.mean(inlier_errors**2)))
+    return rmse, inlier_count
+
+
+# =============================================================================
+# Match point filtering helpers
+# =============================================================================
+
+
+def _grid_sample_matches(
+    pts_src: np.ndarray,
+    pts_dst: np.ndarray,
+    grid_size: int = 100,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Spatially thin match points using a grid.
+
+    Divides the source image space into a grid of *grid_size* x *grid_size*
+    pixel cells and keeps at most one point per cell (the one closest to
+    the cell centre).  This ensures even spatial distribution and prevents
+    dense clusters from dominating the homography estimation.
+
+    Args:
+        pts_src: Source points, shape (N, 2).
+        pts_dst: Destination points, shape (N, 2).
+        grid_size: Cell size in pixels.
+
+    Returns:
+        Filtered ``(pts_src, pts_dst)`` with at most one point per cell.
+    """
+    if len(pts_src) == 0:
+        return pts_src, pts_dst
+
+    # Assign each point to a grid cell
+    cell_x = pts_src[:, 0] // grid_size
+    cell_y = pts_src[:, 1] // grid_size
+
+    # Compute distance to cell centre for each point
+    cx = (cell_x + 0.5) * grid_size
+    cy = (cell_y + 0.5) * grid_size
+    dist = (pts_src[:, 0] - cx) ** 2 + (pts_src[:, 1] - cy) ** 2
+
+    # Group by cell, keep the closest to centre
+    cell_ids = cell_y * 100000 + cell_x  # unique cell id
+    keep = np.zeros(len(pts_src), dtype=bool)
+
+    unique_cells = np.unique(cell_ids)
+    for cid in unique_cells:
+        mask = cell_ids == cid
+        indices = np.where(mask)[0]
+        best = indices[np.argmin(dist[indices])]
+        keep[best] = True
+
+    logger.debug(
+        f"Grid sampling: {len(pts_src)} -> {int(np.sum(keep))} "
+        f"(grid_size={grid_size})"
+    )
+    return pts_src[keep], pts_dst[keep]
+
+
+def _filter_sky_matches(
+    pts_src: np.ndarray,
+    pts_dst: np.ndarray,
+    sky_mask: Optional[np.ndarray],
+    cloud_mask: Optional[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Remove match points that fall in sky or cloud regions.
+
+    Points whose source coordinates land on sky or cloud pixels are
+    excluded because cloud features are unreliable for alignment.
+
+    Args:
+        pts_src: Source points, shape (N, 2).
+        pts_dst: Destination points, shape (N, 2).
+        sky_mask: Boolean sky mask (H, W), or None.
+        cloud_mask: Boolean cloud mask (H, W), or None.
+
+    Returns:
+        Filtered ``(pts_src, pts_dst)``.
+    """
+    if len(pts_src) == 0:
+        return pts_src, pts_dst
+
+    if sky_mask is None and cloud_mask is None:
+        return pts_src, pts_dst
+
+    keep = np.ones(len(pts_src), dtype=bool)
+
+    for mask in [sky_mask, cloud_mask]:
+        if mask is None:
+            continue
+        h, w = mask.shape[:2]
+        x = pts_src[:, 0].astype(int)
+        y = pts_src[:, 1].astype(int)
+        # Clamp to image bounds
+        x = np.clip(x, 0, w - 1)
+        y = np.clip(y, 0, h - 1)
+        keep &= ~mask[y, x]
+
+    n_removed = len(pts_src) - int(np.sum(keep))
+    if n_removed > 0:
+        logger.debug(
+            f"Sky/cloud filter: removed {n_removed}/{len(pts_src)} points"
+        )
+    return pts_src[keep], pts_dst[keep]
+
+
+# =============================================================================
+# Mask warping helpers
+# =============================================================================
+
+
+def _warp_mask(
+    mask: Optional[np.ndarray],
+    H: np.ndarray,
+    map_x: Optional[np.ndarray],
+    map_y: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    """Warp a boolean SAM mask through distortion correction + homography.
+
+    Args:
+        mask: Boolean mask array (H, W), or None.
+        H: 3x3 homography matrix.
+        map_x: Distortion remap table (x), or None.
+        map_y: Distortion remap table (y), or None.
+
+    Returns:
+        Warped boolean mask, or None if input is None.
+    """
+    if mask is None:
+        return None
+
+    mask_u8 = mask.astype(np.uint8) * 255
+    if map_x is not None and map_y is not None:
+        mask_u8 = cv2.remap(
+            mask_u8, map_x, map_y, interpolation=cv2.INTER_NEAREST,
+        )
+    h, w = mask_u8.shape[:2]
+    warped = cv2.warpPerspective(mask_u8, H, (w, h), flags=cv2.INTER_NEAREST)
+    return warped > 127
+
+
+def _warp_sam_ridge(
+    sam_ridge: Optional[np.ndarray],
+    H: np.ndarray,
+    map_x: Optional[np.ndarray],
+    map_y: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    """Warp a per-column SAM ridge array through distortion + homography.
+
+    Converts the ridge to a thin binary mask, warps it, then extracts
+    the per-column top pixel as the new ridge guide.
+
+    Args:
+        sam_ridge: Per-column y coordinate array (int32), or None.
+        H: 3x3 homography matrix.
+        map_x: Distortion remap table (x), or None.
+        map_y: Distortion remap table (y), or None.
+
+    Returns:
+        Warped per-column y coordinate array, or None if input is None.
+    """
+    if sam_ridge is None:
+        return None
+
+    w = len(sam_ridge)
+    # Determine image height from the ridge values
+    valid = sam_ridge[sam_ridge >= 0]
+    if len(valid) == 0:
+        return None
+    h = int(np.max(valid)) + 100  # add margin below the ridge
+
+    # Build a thin mask around the ridge (±2 px band)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for x in range(w):
+        y = sam_ridge[x]
+        if 0 <= y < h:
+            y_lo = max(0, y - 2)
+            y_hi = min(h, y + 3)
+            mask[y_lo:y_hi, x] = 255
+
+    if map_x is not None and map_y is not None:
+        # Crop remap tables to our mask height
+        mx = map_x[:h, :w] if map_x.shape[0] >= h else map_x
+        my = map_y[:h, :w] if map_y.shape[0] >= h else map_y
+        if mx.shape[0] < h:
+            # Pad if necessary
+            pad_h = h - mx.shape[0]
+            mx = np.pad(mx, ((0, pad_h), (0, 0)), mode="edge")
+            my = np.pad(my, ((0, pad_h), (0, 0)), mode="edge")
+        mask = cv2.remap(mask, mx, my, interpolation=cv2.INTER_NEAREST)
+
+    warped = cv2.warpPerspective(mask, H, (w, h), flags=cv2.INTER_NEAREST)
+
+    # Extract per-column top pixel
+    result = np.full(w, -1, dtype=np.int32)
+    for x in range(w):
+        col = warped[:, x]
+        positions = np.where(col > 127)[0]
+        if len(positions) > 0:
+            result[x] = positions[0]
+
+    return result
+
+
+# =============================================================================
+# Single-segment alignment attempt
+# =============================================================================
+
+
+def _try_align_segment(
+    candidates: list[dict],
+    ref_path: str,
+    method: str,
+    device: str,
+    resize: Optional[int],
+    min_ransac_inliers: int,
+    max_rmse: float,
+    ridge_validation: bool,
+    target_ridge: Optional[np.ndarray],
+    masks_dir: Optional[Path],
+    map_x: Optional[np.ndarray],
+    map_y: Optional[np.ndarray],
+    grid_size: int = 100,
+    ransac_thresh: float = 10.0,
+) -> Optional[dict]:
+    """Try aligning a segment using candidate anchors.
+
+    Tries candidates in order, applying 3-layer validation:
+      - Layer 1: RANSAC inlier count >= min_ransac_inliers
+      - Layer 2: Reprojection RMSE <= max_rmse
+      - Layer 3: Ridgeline match on warped image vs target ridgeline
+
+    Before validation, raw matches are filtered:
+      - Sky/cloud points removed using anchor SAM masks
+      - Spatially thinned via grid sampling
+
+    For Layer 3, the anchor's original SAM masks are warped through
+    the same distortion + homography transform so they accurately
+    guide ridgeline detection on the warped image.
+
+    Args:
+        candidates: Anchor candidates (from _select_anchor_candidates).
+        ref_path: Reference image path to match against.
+        method: Matching method.
+        device: Compute device.
+        resize: Resize parameter.
+        min_ransac_inliers: Minimum inlier count (Layer 1).
+        max_rmse: Maximum RMSE (Layer 2).
+        ridge_validation: Enable ridgeline validation (Layer 3).
+        target_ridge: Target ridgeline array for Layer 3.
+        masks_dir: SAM masks directory for Layer 3.
+        map_x: Distortion remap table (x).
+        map_y: Distortion remap table (y).
+        grid_size: Grid cell size in pixels for spatial thinning.
+        ransac_thresh: RANSAC reprojection threshold in pixels for
+            homography estimation.
+
+    Returns:
+        Tuple of ``(result, best_failed)``.
+        *result* is a dict with ``H``, ``rmse``, ``num_matches``, ``anchor``,
+        ``pts_src_inlier``, ``pts_dst_inlier`` on success, or None if all
+        candidates fail.
+        *best_failed* is the best failing attempt dict (same keys plus
+        ``fail_reason``), or None if no attempt reached Layer 1.
+    """
+    from yamami.ridgeline import load_mask
+
+    best_failed: Optional[dict] = None
+    best_failed_inliers = -1
+
+    for cand in candidates:
+        anchor_path = cand["path"]
+        try:
+            pts_src, pts_dst = _match_images(
+                anchor_path, ref_path, method=method, device=device,
+                resize=resize,
+            )
+        except Exception as e:
+            logger.debug(f"Matching failed for {anchor_path}: {e}")
+            continue
+
+        n_raw = len(pts_src)
+
+        # Filter out points in sky/cloud regions
+        if masks_dir is not None:
+            basename = Path(anchor_path).stem
+            sky = load_mask(masks_dir / f"{basename}_sky.npz")
+            cloud = load_mask(masks_dir / f"{basename}_cloud.npz")
+            pts_src, pts_dst = _filter_sky_matches(
+                pts_src, pts_dst, sky, cloud,
+            )
+
+        # Spatial grid thinning
+        if grid_size > 0:
+            pts_src, pts_dst = _grid_sample_matches(
+                pts_src, pts_dst, grid_size=grid_size,
+            )
+
+        logger.info(
+            f"Anchor {Path(anchor_path).name}: "
+            f"{n_raw} raw -> {len(pts_src)} filtered matches"
+        )
+
+        if len(pts_src) < 4:
+            logger.debug(
+                f"Anchor {Path(anchor_path).name}: "
+                f"insufficient matches ({len(pts_src)})"
+            )
+            continue
+
+        H, inlier_mask = estimate_homography(
+            pts_src.astype(np.float32), pts_dst.astype(np.float32),
+            ransac_thresh=ransac_thresh,
+        )
+        if H is None:
+            logger.debug(f"Anchor {Path(anchor_path).name}: homography failed")
+            continue
+
+        rmse, inlier_count = _compute_rmse(
+            H, pts_src, pts_dst, inlier_mask=inlier_mask,
+        )
+
+        # Build candidate result for tracking the best failed attempt
+        pts_src_inlier = pts_src[inlier_mask] if inlier_mask is not None else pts_src
+        pts_dst_inlier = pts_dst[inlier_mask] if inlier_mask is not None else pts_dst
+        cand_result = {
+            "H": H,
+            "rmse": rmse,
+            "num_matches": inlier_count,
+            "anchor": Path(anchor_path).name,
+            "method": method,
+            "pts_src_inlier": pts_src_inlier,
+            "pts_dst_inlier": pts_dst_inlier,
+        }
+
+        # Layer 1: Inlier count
+        if inlier_count < min_ransac_inliers:
+            logger.debug(
+                f"Anchor {Path(anchor_path).name}: "
+                f"Layer 1 fail (inliers={inlier_count} < {min_ransac_inliers})"
+            )
+            if inlier_count > best_failed_inliers:
+                best_failed = {**cand_result, "fail_reason": f"Layer1: inliers={inlier_count}"}
+                best_failed_inliers = inlier_count
+            continue
+
+        # Layer 2: RMSE
+        if rmse > max_rmse:
+            logger.debug(
+                f"Anchor {Path(anchor_path).name}: "
+                f"Layer 2 fail (RMSE={rmse:.2f} > {max_rmse})"
+            )
+            if inlier_count > best_failed_inliers:
+                best_failed = {**cand_result, "fail_reason": f"Layer2: RMSE={rmse:.2f}"}
+                best_failed_inliers = inlier_count
+            continue
+
+        # Layer 3: Ridgeline validation
+        if ridge_validation and target_ridge is not None and masks_dir is not None:
+            from yamami.ridgeline import (
+                detect_ridgeline,
+                get_sam_ridge,
+                load_mask,
+                match_ridgelines_ransac,
+            )
+
+            anchor_img = cv2.imread(anchor_path)
+            if anchor_img is not None:
+                # Apply distortion correction + homography
+                if map_x is not None and map_y is not None:
+                    anchor_img = cv2.remap(
+                        anchor_img, map_x, map_y,
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                warped = apply_warp(anchor_img, H)
+
+                # Load anchor's SAM masks and warp them through
+                # the same transform so they serve as accurate
+                # guides in the warped coordinate system.
+                basename = Path(anchor_path).stem
+                w_sam_ridge = _warp_sam_ridge(
+                    get_sam_ridge(masks_dir / f"{basename}_mountain.npz"),
+                    H, map_x, map_y,
+                )
+                w_sky = _warp_mask(
+                    load_mask(masks_dir / f"{basename}_sky.npz"),
+                    H, map_x, map_y,
+                )
+                w_cloud = _warp_mask(
+                    load_mask(masks_dir / f"{basename}_cloud.npz"),
+                    H, map_x, map_y,
+                )
+
+                warped_ridge, _, _ = detect_ridgeline(
+                    warped, w_sam_ridge, w_sky, w_cloud,
+                )
+                mr = match_ridgelines_ransac(target_ridge, warped_ridge)
+
+                if not mr["match_success"]:
+                    logger.debug(
+                        f"Anchor {Path(anchor_path).name}: "
+                        f"Layer 3 fail (ridge inlier_ratio={mr['inlier_ratio']:.2f})"
+                    )
+                    if inlier_count > best_failed_inliers:
+                        best_failed = {
+                            **cand_result,
+                            "fail_reason": f"Layer3: inlier_ratio={mr['inlier_ratio']:.2f}",
+                        }
+                        best_failed_inliers = inlier_count
+                    continue
+
+        logger.info(
+            f"Anchor {Path(anchor_path).name}: "
+            f"success (RMSE={rmse:.2f}, inliers={inlier_count})"
+        )
+
+        return cand_result, None
+
+    return None, best_failed
+
+
+# =============================================================================
+# Round-based alignment
+# =============================================================================
+
+
+def _select_aligned_reference(
+    df: pd.DataFrame,
+    segment_results: dict,
+    target_seg_id: int,
+    target_blue_ratio: float,
+    aligned_dir: str,
+) -> Optional[str]:
+    """Select best aligned image as reference for Round 2+.
+
+    Picks from successfully aligned segments the image whose blue_ratio
+    is closest to the target segment's median blue_ratio.
+
+    Args:
+        df: DataFrame.
+        segment_results: Current alignment results.
+        target_seg_id: Segment that needs alignment.
+        target_blue_ratio: Target blue ratio for scoring.
+        aligned_dir: Directory with aligned images.
+
+    Returns:
+        Path to aligned reference image, or None.
+    """
+    best_path = None
+    best_score = -1.0
+
+    for seg_id, sr in segment_results.items():
+        if sr["status"] != "success":
+            continue
+
+        anchor_name = sr.get("anchor", "")
+        if not anchor_name:
+            continue
+
+        aligned_path = Path(aligned_dir) / anchor_name
+        if not aligned_path.exists():
+            continue
+
+        # Score by blue_ratio proximity
+        seg_df = df[df["segment_id"] == seg_id]
+        br_vals = seg_df["ridge_blue_ratio"].dropna()
+        br = br_vals.median() if len(br_vals) > 0 else 0.33
+
+        score = 1.0 - min(abs(br - target_blue_ratio) / 0.2, 1.0)
+        if score > best_score:
+            best_score = score
+            best_path = str(aligned_path)
+
+    return best_path
+
+
+def _round_based_alignment(
+    df: pd.DataFrame,
+    target_path: str,
+    segment_candidates: dict[int, list[dict]],
+    method: str,
+    device: str,
+    resize: Optional[int],
+    max_rounds: int,
+    min_ransac_inliers: int,
+    max_rmse: float,
+    ridge_validation: bool,
+    target_ridge: Optional[np.ndarray],
+    masks_dir: Path,
+    aligned_dir: str,
+    seg_maps: dict[int, tuple[Optional[np.ndarray], Optional[np.ndarray]]],
+    grid_size: int = 100,
+    ransac_thresh: float = 10.0,
+) -> dict[int, dict]:
+    """Iterative round-based alignment.
+
+    Round 1: Each segment tries matching anchor candidates to the target
+    image directly.
+
+    Round 2+: Failed segments try matching against aligned images from
+    successful segments (which are already in target coordinate system,
+    so no transform composition is needed).
+
+    Args:
+        seg_maps: Per-segment distortion maps.
+            ``{segment_id: (map_x, map_y)}``.  Values may be
+            ``(None, None)`` when distortion correction is disabled.
+
+    Terminates when all segments succeed, no new successes occur, or
+    max_rounds is reached.
+
+    Returns:
+        Dict mapping segment_id to result dict with keys: ``status``,
+        ``H``, ``rmse``, ``num_matches``, ``anchor``, ``round``, ``method``.
+    """
+    segment_results: dict[int, dict] = {}
+    pending_segments = set(segment_candidates.keys())
+
+    for round_num in range(1, max_rounds + 1):
+        if not pending_segments:
+            break
+
+        logger.info(
+            f"Round {round_num}: {len(pending_segments)} segments pending"
+        )
+        new_successes = 0
+
+        for seg_id in list(pending_segments):
+            candidates = segment_candidates.get(seg_id, [])
+            if not candidates:
+                segment_results[seg_id] = {
+                    "status": "failed",
+                    "H": None,
+                    "rmse": np.nan,
+                    "num_matches": 0,
+                    "anchor": "",
+                    "round": -1,
+                    "method": method,
+                }
+                pending_segments.discard(seg_id)
+                continue
+
+            # Determine reference for this round
+            if round_num == 1:
+                ref_path = target_path
+            else:
+                # Use aligned image from a successful segment
+                seg_df = df[df["segment_id"] == seg_id]
+                br_vals = seg_df["ridge_blue_ratio"].dropna()
+                seg_br = br_vals.median() if len(br_vals) > 0 else 0.33
+
+                ref_path = _select_aligned_reference(
+                    df, segment_results, seg_id, seg_br, aligned_dir,
+                )
+                if ref_path is None:
+                    continue  # No reference available yet
+
+            seg_mx, seg_my = seg_maps.get(seg_id, (None, None))
+
+            result, best_failed = _try_align_segment(
+                candidates,
+                ref_path,
+                method=method,
+                device=device,
+                resize=resize,
+                min_ransac_inliers=min_ransac_inliers,
+                max_rmse=max_rmse,
+                ridge_validation=ridge_validation,
+                target_ridge=target_ridge,
+                masks_dir=masks_dir,
+                map_x=seg_mx,
+                map_y=seg_my,
+                grid_size=grid_size,
+                ransac_thresh=ransac_thresh,
+            )
+
+            # Track best failed attempt per segment (for diagnostics)
+            if best_failed is not None:
+                prev = segment_results.get(seg_id)
+                if (
+                    prev is None
+                    or prev.get("status") != "success"
+                    and best_failed["num_matches"] > prev.get("num_matches", 0)
+                ):
+                    segment_results[seg_id] = {
+                        **best_failed,
+                        "status": "failed",
+                        "round": round_num,
+                        "ref_path": ref_path,
+                    }
+
+            if result is not None:
+                result["status"] = "success"
+                result["round"] = round_num
+                result["ref_path"] = ref_path
+                segment_results[seg_id] = result
+                pending_segments.discard(seg_id)
+                new_successes += 1
+
+                # Save the anchor's aligned image for use in later rounds
+                anchor_name = result["anchor"]
+                # Find the anchor path from candidates
+                anchor_path = None
+                for c in candidates:
+                    if Path(c["path"]).name == anchor_name:
+                        anchor_path = c["path"]
+                        break
+
+                if anchor_path is not None:
+                    anchor_img = cv2.imread(anchor_path)
+                    if anchor_img is not None:
+                        if seg_mx is not None and seg_my is not None:
+                            anchor_img = cv2.remap(
+                                anchor_img, seg_mx, seg_my,
+                                interpolation=cv2.INTER_LINEAR,
+                            )
+                        warped = apply_warp(anchor_img, result["H"])
+                        out_path = Path(aligned_dir) / anchor_name
+                        cv2.imwrite(str(out_path), warped)
+
+        logger.info(
+            f"Round {round_num}: {new_successes} new successes"
+        )
+
+        if new_successes == 0:
+            logger.info("No new successes, stopping rounds")
+            break
+
+    # Mark remaining pending as failed (keep best_failed data if present)
+    for seg_id in pending_segments:
+        if seg_id not in segment_results:
+            segment_results[seg_id] = {
+                "status": "failed",
+                "H": None,
+                "rmse": np.nan,
+                "num_matches": 0,
+                "anchor": "",
+                "round": -1,
+                "method": method,
+            }
+
+    return segment_results
+
+
+# =============================================================================
+# Warp segment images
+# =============================================================================
+
+
+def _warp_segment_images(
+    df: pd.DataFrame,
+    segment_id: int,
+    H: np.ndarray,
+    map_x: Optional[np.ndarray],
+    map_y: Optional[np.ndarray],
+    aligned_dir: str,
+) -> None:
+    """Apply distortion correction + homography to all images in a segment.
+
+    Args:
+        df: DataFrame with ``segment_id`` and ``path`` columns.
+        segment_id: Segment to process.
+        H: 3x3 homography matrix.
+        map_x: Distortion remap table (x), or None.
+        map_y: Distortion remap table (y), or None.
+        aligned_dir: Output directory.
+    """
+    seg_df = df[df["segment_id"] == segment_id]
+
+    for _, row in seg_df.iterrows():
+        filepath = row["path"]
+        output_path = Path(aligned_dir) / Path(filepath).name
+
+        if output_path.exists():
+            continue  # Already saved (e.g. anchor image)
+
+        img = cv2.imread(filepath)
+        if img is None:
+            logger.warning(f"Could not read image: {filepath}")
+            continue
+
+        if map_x is not None and map_y is not None:
+            img = cv2.remap(
+                img, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+            )
+        aligned = apply_warp(img, H)
+        cv2.imwrite(str(output_path), aligned)
+
+
+# =============================================================================
+# Retained helper functions
+# =============================================================================
 
 
 def estimate_homography(
-    src_pts: np.ndarray, dst_pts: np.ndarray
-) -> Optional[np.ndarray]:
-    """
-    Estimate homography matrix from matched point pairs.
+    src_pts: np.ndarray,
+    dst_pts: np.ndarray,
+    ransac_thresh: float = 10.0,
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Estimate homography matrix from matched point pairs.
 
     Uses RANSAC to robustly estimate the homography transformation.
 
     Args:
         src_pts: Source points array of shape (N, 2).
         dst_pts: Destination points array of shape (N, 2).
+        ransac_thresh: RANSAC reprojection threshold in pixels.
 
     Returns:
-        np.ndarray or None: 3x3 homography matrix, or None if insufficient points.
+        Tuple of (H, mask) where H is a 3x3 homography matrix and mask
+        is a boolean array indicating RANSAC inliers. Both are None if
+        estimation fails.
     """
     if len(src_pts) < 4 or len(dst_pts) < 4:
-        return None
+        return None, None
 
-    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-
-    return H
+    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, ransac_thresh)
+    if H is None:
+        return None, None
+    inlier_mask = mask.ravel().astype(bool) if mask is not None else None
+    return H, inlier_mask
 
 
 def apply_warp(img: np.ndarray, H: np.ndarray) -> np.ndarray:
-    """
-    Apply homography transformation to an image.
+    """Apply homography transformation to an image.
 
     Args:
         img: Input image.
         H: 3x3 homography matrix.
 
     Returns:
-        np.ndarray: Warped image.
+        Warped image.
     """
     h, w = img.shape[:2]
-    warped = cv2.warpPerspective(img, H, (w, h))
-    return warped
-
-
-def _detect_all_shifts(profile: pd.DataFrame, ref: str) -> np.ndarray:
-    """
-    Detect shifts for all images relative to adjacent frames.
-
-    Args:
-        profile: DataFrame with 'filepath' column.
-        ref: Reference image path.
-
-    Returns:
-        np.ndarray: Array of shape (N, 2) with shifts.
-    """
-    n = len(profile)
-    shifts = np.zeros((n, 2))
-
-    # Load reference image
-    ref_img = cv2.imread(ref, cv2.IMREAD_GRAYSCALE)
-    if ref_img is None:
-        logger.warning(f"Could not read reference image: {ref}")
-        return shifts
-
-    prev_gray = ref_img
-
-    for i, (_, row) in enumerate(profile.iterrows()):
-        filepath = row["filepath"]
-        curr_gray = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
-
-        if curr_gray is None:
-            logger.warning(f"Could not read image: {filepath}")
-            continue
-
-        # Resize if needed
-        if curr_gray.shape != prev_gray.shape:
-            curr_gray = cv2.resize(curr_gray, (prev_gray.shape[1], prev_gray.shape[0]))
-
-        try:
-            dx, dy = phase_correlation_change_detect(prev_gray, curr_gray)
-            shifts[i] = [dx, dy]
-        except Exception as e:
-            logger.warning(f"Phase correlation failed for {filepath}: {e}")
-
-        prev_gray = curr_gray
-
-    return shifts
+    return cv2.warpPerspective(img, H, (w, h))
 
 
 def _opencv_match(
@@ -367,17 +1448,16 @@ def _opencv_match(
     detector_type: str = "akaze",
     ratio: float = _DEFAULT_LOWE_RATIO,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    OpenCV feature matching using AKAZE or SIFT.
+    """OpenCV feature matching using AKAZE or SIFT.
 
     Args:
         img1: First image (BGR).
         img2: Second image (BGR).
-        detector_type: Feature detector type: "akaze" or "sift".
+        detector_type: Feature detector type: ``"akaze"`` or ``"sift"``.
         ratio: Lowe's ratio test threshold.
 
     Returns:
-        tuple: (pts1, pts2) matched point pairs, shape (N, 2).
+        (pts1, pts2) matched point pairs, shape (N, 2).
     """
     if detector_type.lower() == "akaze":
         detector = cv2.AKAZE_create()
@@ -398,7 +1478,6 @@ def _opencv_match(
     bf = cv2.BFMatcher()
     matches = bf.knnMatch(des1, des2, k=2)
 
-    # Lowe's ratio test
     good = []
     for match_pair in matches:
         if len(match_pair) == 2:
@@ -426,19 +1505,18 @@ def _imm_match(
     resize: Optional[int] = None,
     **kwargs,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Feature matching using imm (image-matching-models) package.
+    """Feature matching using imm (image-matching-models) package.
 
     Args:
         path1: Path to first image.
         path2: Path to second image.
-        method: IMM matching method name (e.g., "roma", "loftr", "sift-lightglue").
-        device: Device for computation ("cpu" or "cuda").
+        method: IMM matching method name.
+        device: Device for computation.
         resize: Resize images to this size (optional).
         **kwargs: Additional arguments for imm's get_matcher.
 
     Returns:
-        tuple: (pts1, pts2) matched point pairs, shape (N, 2).
+        (pts1, pts2) matched point pairs, shape (N, 2).
 
     Raises:
         ImportError: If imm package is not installed.
@@ -451,7 +1529,6 @@ def _imm_match(
             "Install with: pip install image-matching-models"
         )
 
-    # Get original image sizes for coordinate scaling
     img1_cv = cv2.imread(path1)
     img2_cv = cv2.imread(path2)
 
@@ -463,17 +1540,13 @@ def _imm_match(
     h1_org, w1_org = img1_cv.shape[:2]
     h2_org, w2_org = img2_cv.shape[:2]
 
-    # Suppress torchvision deprecation warnings about 'pretrained' parameter
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
         matcher = get_matcher(method, device=device, **kwargs)
 
-    # Use matcher's load_image for proper preprocessing
     img0 = matcher.load_image(path1, resize=resize)
     img1 = matcher.load_image(path2, resize=resize)
 
-    # Get the size after loading (to compute scale factors)
-    # img shape is (C, H, W) or (1, C, H, W)
     if img0.dim() == 4:
         _, _, h0_loaded, w0_loaded = img0.shape
         _, _, h1_loaded, w1_loaded = img1.shape
@@ -485,7 +1558,6 @@ def _imm_match(
     pts1 = result["matched_kpts0"]
     pts2 = result["matched_kpts1"]
 
-    # Handle both torch tensors and numpy arrays
     if hasattr(pts1, "cpu"):
         pts1 = pts1.cpu().numpy()
         pts2 = pts2.cpu().numpy()
@@ -496,7 +1568,6 @@ def _imm_match(
             np.array([]).reshape(0, 2).astype("int32"),
         )
 
-    # Scale keypoints back to original image coordinates
     scale_x0 = w1_org / w0_loaded
     scale_y0 = h1_org / h0_loaded
     scale_x1 = w2_org / w1_loaded
@@ -520,25 +1591,23 @@ def _match_images(
     device: str = "cpu",
     resize: Optional[int] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Match two images using specified method.
+    """Match two images using specified method.
 
     Dispatches to appropriate matching function based on method name.
 
     Args:
         path1: Path to first image (anchor).
         path2: Path to second image (reference).
-        method: Matching method ("akaze", "sift", or IMM methods like "roma", "loftr").
-        device: Device for IMM methods ("cpu" or "cuda").
+        method: Matching method.
+        device: Device for IMM methods.
         resize: Resize for IMM methods.
 
     Returns:
-        tuple: (pts1, pts2) matched point pairs in original coordinates, shape (N, 2).
+        (pts1, pts2) matched point pairs in original coordinates, shape (N, 2).
     """
     method_lower = method.lower()
 
     if method_lower in ("akaze", "sift"):
-        # OpenCV-based matching
         img1 = cv2.imread(path1)
         img2 = cv2.imread(path2)
 
@@ -558,10 +1627,8 @@ def _match_images(
         return _opencv_match(img1, img2, detector_type=method_lower)
 
     elif method_lower in [m.lower() for m in IMM_METHODS]:
-        # IMM-based matching
         effective_resize = resize
 
-        # Auto-resize for memory-intensive methods (non-LightGlue)
         if method_lower not in [m.lower() for m in _LIGHTGLUE_METHODS]:
             if resize is None:
                 effective_resize = _DEFAULT_RESIZE_HEAVY
@@ -574,203 +1641,3 @@ def _match_images(
     else:
         available = ["akaze", "sift"] + IMM_METHODS
         raise ValueError(f"Unknown method '{method}'. Available methods: {available}")
-
-
-def _match_all_to_reference(
-    profile: pd.DataFrame,
-    ref: str,
-    anchors: list[dict],
-    method: str,
-    device: str = "cpu",
-    resize: Optional[int] = None,
-) -> list[dict]:
-    """
-    Match all images to reference using feature matching.
-
-    For each segment, matches the anchor image to the reference image to compute
-    a homography transformation. This transformation is then applied to all images
-    within that segment.
-
-    Args:
-        profile: DataFrame with 'filepath' column.
-        ref: Reference image path.
-        anchors: List of anchor dictionaries with keys:
-            - segment_id: Segment identifier.
-            - filepath: Path to anchor image.
-            - idx: Index in profile.
-        method: Matching method name ("akaze", "sift", or IMM methods).
-        device: Device for IMM methods ("cpu" or "cuda").
-        resize: Resize for IMM methods (None for auto).
-
-    Returns:
-        list[dict]: List of warp parameter dictionaries with keys:
-            - filepath: Image path
-            - H_00 through H_22: Homography matrix elements
-            - match_status: "success" or "failed"
-            - num_matches: Number of matched points (for anchor images)
-    """
-    warp_data = []
-
-    # Build a mapping from segment_id to anchor info and homography
-    segment_homographies = {}
-
-    # First, compute homography for each anchor to reference
-    for anchor in anchors:
-        segment_id = anchor["segment_id"]
-        anchor_path = anchor["filepath"]
-
-        logger.debug(f"Matching anchor {anchor_path} to reference {ref}")
-
-        try:
-            pts_anchor, pts_ref = _match_images(
-                anchor_path, ref, method=method, device=device, resize=resize
-            )
-
-            if len(pts_anchor) >= 4:
-                H = estimate_homography(
-                    pts_anchor.astype(np.float32), pts_ref.astype(np.float32)
-                )
-                if H is not None:
-                    segment_homographies[segment_id] = {
-                        "H": H,
-                        "num_matches": len(pts_anchor),
-                        "status": "success",
-                    }
-                    logger.debug(
-                        f"Segment {segment_id}: matched {len(pts_anchor)} points"
-                    )
-                else:
-                    segment_homographies[segment_id] = {
-                        "H": np.eye(3, dtype=np.float32),
-                        "num_matches": len(pts_anchor),
-                        "status": "failed",
-                    }
-                    logger.warning(
-                        f"Segment {segment_id}: homography estimation failed"
-                    )
-            else:
-                segment_homographies[segment_id] = {
-                    "H": np.eye(3, dtype=np.float32),
-                    "num_matches": len(pts_anchor),
-                    "status": "failed",
-                }
-                logger.warning(
-                    f"Segment {segment_id}: insufficient matches ({len(pts_anchor)})"
-                )
-        except Exception as e:
-            logger.warning(f"Segment {segment_id}: matching failed: {e}")
-            segment_homographies[segment_id] = {
-                "H": np.eye(3, dtype=np.float32),
-                "num_matches": 0,
-                "status": "failed",
-            }
-
-    # Build segment index lookup for each image
-    # Determine which segment each image belongs to
-    anchor_by_idx = {a["idx"]: a["segment_id"] for a in anchors}
-
-    # Build segment ranges from anchors
-    # Sort anchors by index
-    sorted_anchors = sorted(anchors, key=lambda x: x["idx"])
-    segment_ranges = []
-
-    for i, anchor in enumerate(sorted_anchors):
-        start_idx = anchor["idx"]
-        if i + 1 < len(sorted_anchors):
-            end_idx = sorted_anchors[i + 1]["idx"] - 1
-        else:
-            end_idx = len(profile) - 1
-        segment_ranges.append(
-            {"segment_id": anchor["segment_id"], "start": start_idx, "end": end_idx}
-        )
-
-    # Handle images before first anchor
-    if sorted_anchors and sorted_anchors[0]["idx"] > 0:
-        segment_ranges.insert(
-            0,
-            {
-                "segment_id": sorted_anchors[0]["segment_id"],
-                "start": 0,
-                "end": sorted_anchors[0]["idx"] - 1,
-            },
-        )
-
-    # Assign segment_id to each profile row
-    def get_segment_id(idx: int) -> int:
-        for sr in segment_ranges:
-            if sr["start"] <= idx <= sr["end"]:
-                return sr["segment_id"]
-        # Default to first segment
-        return sorted_anchors[0]["segment_id"] if sorted_anchors else 0
-
-    # Apply homography to all images in each segment
-    for idx, row in profile.iterrows():
-        filepath = row["filepath"]
-        segment_id = get_segment_id(idx)
-
-        if segment_id in segment_homographies:
-            H = segment_homographies[segment_id]["H"]
-            status = segment_homographies[segment_id]["status"]
-            num_matches = segment_homographies[segment_id]["num_matches"]
-        else:
-            H = np.eye(3, dtype=np.float32)
-            status = "failed"
-            num_matches = 0
-
-        warp_data.append(
-            {
-                "filepath": filepath,
-                "H_00": float(H[0, 0]),
-                "H_01": float(H[0, 1]),
-                "H_02": float(H[0, 2]),
-                "H_10": float(H[1, 0]),
-                "H_11": float(H[1, 1]),
-                "H_12": float(H[1, 2]),
-                "H_20": float(H[2, 0]),
-                "H_21": float(H[2, 1]),
-                "H_22": float(H[2, 2]),
-                "segment_id": segment_id,
-                "match_status": status,
-                "num_matches": num_matches if idx in anchor_by_idx else None,
-            }
-        )
-
-    return warp_data
-
-
-def _apply_and_save_warps(
-    profile: pd.DataFrame, warp_data: list[dict], output_dir: str
-) -> None:
-    """
-    Apply warps to images and save to output directory.
-
-    Args:
-        profile: DataFrame with 'filepath' column.
-        warp_data: List of warp parameter dictionaries.
-        output_dir: Directory to save aligned images.
-    """
-    for warp_entry in warp_data:
-        filepath = warp_entry["filepath"]
-
-        # Reconstruct homography matrix
-        H = np.array(
-            [
-                [warp_entry["H_00"], warp_entry["H_01"], warp_entry["H_02"]],
-                [warp_entry["H_10"], warp_entry["H_11"], warp_entry["H_12"]],
-                [warp_entry["H_20"], warp_entry["H_21"], warp_entry["H_22"]],
-            ],
-            dtype=np.float32,
-        )
-
-        # Read image
-        img = cv2.imread(filepath)
-        if img is None:
-            logger.warning(f"Could not read image: {filepath}")
-            continue
-
-        # Apply warp
-        aligned = apply_warp(img, H)
-
-        # Save aligned image
-        output_path = Path(output_dir) / Path(filepath).name
-        cv2.imwrite(str(output_path), aligned)

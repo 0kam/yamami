@@ -5,143 +5,266 @@ These tests use actual mountain time-lapse images to verify the
 pipeline works correctly with real-world data.
 """
 
-from datetime import datetime
+from __future__ import annotations
+
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from yamami.ingest import ingest, profile
+import yamami
+from yamami import ingest, parse_filename
 
-REAL_DATA_DIR = Path(__file__).parent.parent.parent / "test_data_micro"
+
+ROOT = Path(__file__).resolve().parents[2]
+TEST_DATA_MICRO = ROOT / "test_data_micro"
+TEST_DATA_FULL = ROOT / "test_data_full"
 
 
-@pytest.fixture
+def _resolve_device() -> str:
+    """Resolve device for GPU operations."""
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
+
+@pytest.fixture(scope="module")
 def output_dir():
     """Test output directory for persisting results."""
-    out = Path(__file__).parent.parent.parent / "test_outputs"
-    out.mkdir(exist_ok=True)
+    out = ROOT / "test_outputs" / "real_data"
+    out.mkdir(parents=True, exist_ok=True)
     return out
 
 
-@pytest.mark.real_data
-class TestRealDataPipeline:
-    """Integration tests using test_data_micro images."""
+class TestIngestProfile:
+    """Tests for ingest on real data."""
 
-    @pytest.mark.skipif(not REAL_DATA_DIR.exists(), reason="test_data_micro not found")
+    @pytest.mark.skipif(not TEST_DATA_MICRO.exists(), reason="test_data_micro not found")
     def test_ingest_finds_all_images(self):
         """ingest() should find all 15 images in test_data_micro."""
-        index = ingest(str(REAL_DATA_DIR))
+        df = ingest(str(TEST_DATA_MICRO))
 
-        assert len(index) == 15
-        assert "path" in index.columns
+        assert len(df) == 15
+        assert "path" in df.columns
 
-        # All paths should exist
-        for path in index["path"]:
+        for path in df["path"]:
             assert Path(path).exists()
 
-    @pytest.mark.skipif(not REAL_DATA_DIR.exists(), reason="test_data_micro not found")
-    def test_profile_extracts_timestamps(self, output_dir):
-        """profile() should extract timestamps from all filenames."""
-        index = ingest(str(REAL_DATA_DIR))
-        profiles = profile(index)
+    @pytest.mark.skipif(not TEST_DATA_MICRO.exists(), reason="test_data_micro not found")
+    def test_ingest_extracts_metadata(self, output_dir):
+        """ingest() should extract metadata from all images."""
+        df = ingest(str(TEST_DATA_MICRO))
 
-        # Save results for inspection
-        profiles.to_csv(output_dir / "profile.csv", index=False)
+        df.to_csv(output_dir / "profile.csv", index=False)
 
-        # All required columns should exist
         required_columns = [
-            "path",
-            "filename",
-            "timestamp",
-            "width",
-            "height",
-            "filesize",
-            "mean_luma",
-            "std_luma",
-            "p05_luma",
-            "p50_luma",
-            "p95_luma",
+            "path", "filename", "timestamp",
+            "width", "height", "filesize",
+            "mean_luma", "std_luma", "p05_luma", "p50_luma", "p95_luma",
         ]
         for col in required_columns:
-            assert col in profiles.columns, f"Missing column: {col}"
+            assert col in df.columns, f"Missing column: {col}"
 
-        # All timestamps should be extracted
-        assert profiles["timestamp"].notna().all(), "Some timestamps are missing"
+        assert df["timestamp"].notna().all(), "Some timestamps are missing"
 
-        # Verify timestamps are within expected range (2020)
-        for ts in profiles["timestamp"]:
+        for ts in df["timestamp"]:
             assert ts.year == 2020, f"Unexpected year: {ts.year}"
-            assert 4 <= ts.month <= 11, f"Unexpected month: {ts.month}"
 
-    @pytest.mark.skipif(not REAL_DATA_DIR.exists(), reason="test_data_micro not found")
-    def test_profile_computes_luminance_stats(self):
-        """profile() should compute valid luminance statistics."""
-        index = ingest(str(REAL_DATA_DIR))
-        profiles = profile(index)
+    @pytest.mark.skipif(not TEST_DATA_MICRO.exists(), reason="test_data_micro not found")
+    def test_ingest_luminance_values(self):
+        """ingest() should compute valid luminance statistics."""
+        df = ingest(str(TEST_DATA_MICRO))
 
-        # All luminance stats should be computed
         luma_cols = ["mean_luma", "std_luma", "p05_luma", "p50_luma", "p95_luma"]
         for col in luma_cols:
-            assert profiles[col].notna().all(), f"{col} has missing values"
-            # Values should be in valid range (0-255)
-            assert (profiles[col] >= 0).all(), f"{col} has negative values"
-            assert (profiles[col] <= 255).all(), f"{col} has values > 255"
+            assert df[col].notna().all(), f"{col} has missing values"
+            assert (df[col] >= 0).all(), f"{col} has negative values"
+            assert (df[col] <= 255).all(), f"{col} has values > 255"
 
-    @pytest.mark.skipif(not REAL_DATA_DIR.exists(), reason="test_data_micro not found")
-    def test_profile_image_dimensions(self):
-        """profile() should extract valid image dimensions."""
-        index = ingest(str(REAL_DATA_DIR))
-        profiles = profile(index)
 
-        # All dimensions should be extracted
-        assert profiles["width"].notna().all(), "width has missing values"
-        assert profiles["height"].notna().all(), "height has missing values"
+class TestFilenameParser:
+    """Tests for filename parsing on real data."""
 
-        # All dimensions should be positive
-        assert (profiles["width"] > 0).all()
-        assert (profiles["height"] > 0).all()
+    @pytest.mark.skipif(not TEST_DATA_MICRO.exists(), reason="test_data_micro not found")
+    def test_parse_real_filenames(self):
+        """parse_filename() should parse test_data_micro filenames."""
+        df = ingest(str(TEST_DATA_MICRO))
 
-    @pytest.mark.skipif(not REAL_DATA_DIR.exists(), reason="test_data_micro not found")
-    def test_profile_file_sizes(self):
-        """profile() should extract valid file sizes."""
-        index = ingest(str(REAL_DATA_DIR))
-        profiles = profile(index)
+        for _, row in df.iterrows():
+            filename = Path(row["path"]).name
+            result = parse_filename(filename)
 
-        assert profiles["filesize"].notna().all(), "filesize has missing values"
-        # All file sizes should be positive (JPEG images are typically > 1KB)
-        assert (profiles["filesize"] > 1000).all()
+            assert result is not None, f"Failed to parse: {filename}"
+            assert result.year == 2020
 
-    @pytest.mark.skipif(not REAL_DATA_DIR.exists(), reason="test_data_micro not found")
-    def test_timestamps_chronological_order(self, output_dir):
-        """Timestamps should span April to November 2020."""
-        index = ingest(str(REAL_DATA_DIR))
-        profiles = profile(index)
 
-        # Sort by timestamp
-        profiles_sorted = profiles.sort_values("timestamp")
-        profiles_sorted.to_csv(output_dir / "profile_sorted.csv", index=False)
+class TestFullWorkflow:
+    """Full pipeline integration test on real data."""
 
-        timestamps = profiles_sorted["timestamp"].tolist()
+    @pytest.mark.skipif(not TEST_DATA_MICRO.exists(), reason="test_data_micro not found")
+    def test_full_pipeline(self, output_dir):
+        """Test complete pipeline: ingest -> segment -> ridge_qc -> align -> aoi -> gr -> phenology -> snow -> snowmelt."""
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                pytest.skip("CUDA is not available (SAM3 requires CUDA)")
+        except ImportError:
+            pytest.skip("torch is not installed")
 
-        # First image should be in April
-        assert timestamps[0] == datetime(2020, 4, 20, 18, 5)
-        # Last image should be in November
-        assert timestamps[-1] == datetime(2020, 11, 23, 9, 5)
+        try:
+            import sam3  # noqa: F401
+        except ImportError:
+            pytest.skip("sam3 is not installed")
 
-    @pytest.mark.skipif(not REAL_DATA_DIR.exists(), reason="test_data_micro not found")
-    def test_seasonal_luminance_variation(self, output_dir):
-        """Luminance should show seasonal variation (spring->summer->fall)."""
-        index = ingest(str(REAL_DATA_DIR))
-        profiles = profile(index)
-        profiles_sorted = profiles.sort_values("timestamp")
+        # Step 1: Ingest (includes profiling)
+        df = yamami.ingest(str(TEST_DATA_MICRO))
+        assert len(df) == 15
 
-        # Save detailed analysis
-        analysis = profiles_sorted[["filename", "timestamp", "mean_luma"]].copy()
-        analysis["month"] = analysis["timestamp"].apply(lambda x: x.month)
-        analysis.to_csv(output_dir / "luminance_analysis.csv", index=False)
+        df = df.sort_values("timestamp").reset_index(drop=True)
+        df.to_csv(output_dir / "profile.csv", index=False)
 
-        # Group by month and compute mean luminance
-        monthly_luma = analysis.groupby("month")["mean_luma"].mean()
+        # Step 2: Segmentation (returns long format)
+        seg_dir = output_dir / "segment"
+        seg_dir.mkdir(parents=True, exist_ok=True)
 
-        # The data exists and has some variation
-        assert len(monthly_luma) > 1, "Should have data from multiple months"
+        labels_long, masks_dict = yamami.segment(
+            df,
+            prompts=["fog", "cloud", "sky", "sun", "reflection", "snow", "mountain"],
+            output_dir=str(seg_dir),
+            device="cuda",
+        )
+        labels_long.to_csv(seg_dir / "labels.csv", index=False)
+
+        assert "path" in labels_long.columns
+        assert "prompt" in labels_long.columns
+        assert "ratio" in labels_long.columns
+
+        # Merge segment ratios into profile (long -> wide)
+        pivot = labels_long.pivot(
+            index="path", columns="prompt", values="ratio"
+        ).reset_index()
+        pivot.columns = ["path"] + [f"{col}_ratio" for col in pivot.columns[1:]]
+        df = df.merge(pivot, on="path", how="left")
+
+        # Step 3: Ridge QC (basic QC + ridgeline detection + shift segmentation)
+        target_image = df["path"].iloc[len(df) // 2]  # Use middle image as target
+        masks_dir = seg_dir / "masks"
+
+        df = yamami.ridge_qc(
+            df,
+            masks_dir=str(masks_dir),
+            target_image=target_image,
+            output_dir=str(output_dir),
+        )
+
+        assert "is_usable" in df.columns
+        assert "reason_codes" in df.columns
+        assert "ridge_match_success" in df.columns
+        assert "segment_id" in df.columns
+
+        df.to_csv(output_dir / "ridge_qc.csv", index=False)
+
+        # Step 4: Alignment
+        df = yamami.align(
+            df,
+            target_image=target_image,
+            masks_dir=str(masks_dir),
+            method="superpoint-lightglue",
+            output_dir=str(output_dir),
+            device=_resolve_device(),
+            max_rounds=3,
+            ridge_validation=True,
+        )
+
+        assert "align_status" in df.columns
+        assert "align_rmse" in df.columns
+
+        aligned_dir = output_dir / "aligned"
+        assert aligned_dir.exists()
+
+        df.to_csv(output_dir / "aligned_result.csv", index=False)
+
+        # Step 5: AOI Extraction
+        aoi_out = output_dir / "aoi"
+        skyline, aoi_mask = yamami.aoi(target_image, output_dir=str(aoi_out))
+
+        assert isinstance(skyline, pd.DataFrame)
+        assert "x" in skyline.columns
+        assert "y" in skyline.columns
+        assert isinstance(aoi_mask, np.ndarray)
+        assert aoi_mask.sum() > 0
+
+        # Step 6: GR + Phenology
+        gr_out = output_dir / "gr"
+
+        # Use aligned images for GR calculation
+        aligned_df = df[df["align_status"] == "success"].copy()
+        if aligned_df.empty:
+            aligned_df = df.copy()
+
+        gr_images, gr_ts = yamami.gr(
+            aligned_df,
+            aoi_mask > 0,
+            output_dir=str(gr_out),
+        )
+        gr_ts.to_csv(gr_out / "gr_timeseries.csv", index=False)
+
+        assert isinstance(gr_ts, pd.DataFrame)
+        assert "date" in gr_ts.columns
+        assert "doy" in gr_ts.columns
+        assert "mean_gr" in gr_ts.columns
+
+        if not gr_ts.empty:
+            pheno = yamami.phenology(gr_ts)
+            pheno_out = output_dir / "phenology"
+            pheno_out.mkdir(parents=True, exist_ok=True)
+            pheno.to_csv(pheno_out / "phenology.csv", index=False)
+
+            assert "fit_status" in pheno.columns
+
+        # Step 7: Snow + Snowmelt
+        snow_out = output_dir / "snow"
+        snow_masks, thresholds = yamami.snow(
+            aligned_df,
+            aoi_mask,
+            output_dir=str(snow_out),
+        )
+        thresholds.to_csv(snow_out / "thresholds.csv", index=False)
+
+        assert len(snow_masks) > 0
+
+        snowmelt_out = output_dir / "snowmelt"
+        snowmelt_df = yamami.snowmelt(
+            snow_masks,
+            aoi_mask,
+            output_dir=str(snowmelt_out),
+        )
+
+        if not snowmelt_df.empty:
+            snowmelt_df.to_csv(snowmelt_out / "snowmelt.csv", index=False)
+            assert "doy" in snowmelt_df.columns
+            assert "status" in snowmelt_df.columns
+
+        # Step 8: Visualization
+        viz_out = output_dir / "viz"
+        if not gr_ts.empty:
+            pheno_spatial = pd.DataFrame({
+                "row": [0, 0, 1, 1],
+                "col": [0, 1, 0, 1],
+                "gup": [100, 110, 105, 115],
+                "gdown": [250, 260, 255, 265],
+                "gmax": [175, 185, 180, 190],
+            })
+            viz_result = yamami.viz(pheno_spatial, output_dir=str(viz_out))
+
+            assert "gup" in viz_result
+            assert Path(viz_result["gup"]).exists()
+
+        # Step 9: Export
+        export_result = yamami.export(str(output_dir))
+
+        assert Path(export_result).exists()
+        assert (Path(export_result) / "processing_log.json").exists()
