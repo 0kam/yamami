@@ -10,7 +10,8 @@ Usage:
     python test_pipeline_step_by_step.py --step 2      # segmentのみ
     python test_pipeline_step_by_step.py --step 3      # pre_qcのみ（稜線検出・シフト検出含む）
     python test_pipeline_step_by_step.py --step 4      # alignのみ
-    python test_pipeline_step_by_step.py --step 1-4    # step 1から4まで
+    python test_pipeline_step_by_step.py --step 5      # snow + snowmelt
+    python test_pipeline_step_by_step.py --step 1-5    # step 1から5まで
     python test_pipeline_step_by_step.py               # 全ステップ実行
 """
 
@@ -21,12 +22,12 @@ import numpy as np
 import pandas as pd
 
 # デフォルト設定
-DEFAULT_OUTPUT_DIR = Path("test_outputs/full")
-DEFAULT_DATA_DIR = Path("test_data_full")
+DEFAULT_OUTPUT_DIR = Path("test_outputs/summer")
+DEFAULT_DATA_DIR = Path("test_data_summer")
 CSV_FILENAME = "pipeline_result.csv"
 
 # ターゲット画像（稜線マッチングの参照画像）
-TARGET_IMAGE = "test_data_full/mrd_085_eos_vis_20200713_0905_R.JPG"
+TARGET_IMAGE = "test_data_summer/mrd_085_eos_vis_20200713_0905_R.JPG"
 
 
 def get_csv_path(output_dir: Path) -> Path:
@@ -405,6 +406,159 @@ def step4_align(output_dir: Path, target_image: str = None) -> None:
     print(f"\n結果を保存: {csv_path}")
 
 
+def step5_snow(output_dir: Path) -> None:
+    """
+    Step 5: 雪検出 + 融雪日推定
+
+    入力: output_dir/pipeline_result.csv (step4の出力)
+          output_dir/aligned/ (アライメント済み画像 + aoi_mask.png)
+          output_dir/segment/masks/ (SAMマスク)
+    出力: output_dir/pipeline_result.csv (snow結果を追加)
+          output_dir/snow/ (雪マスク、プレビュー、融雪CSV)
+    """
+    print("\n" + "=" * 60)
+    print("Step 5: snow - 雪検出 + 融雪日推定")
+    print("=" * 60)
+
+    from yamami.aoi import load_aoi_mask
+    from yamami.snow import snow, snowmelt
+
+    # CSVから読み込み
+    csv_path = get_csv_path(output_dir)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Step 4の出力が見つかりません: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    print(f"\n読み込んだ画像数: {len(df)}")
+
+    # 必要なカラムの確認
+    if "align_status" not in df.columns:
+        raise ValueError("Step 4のアライメント結果がありません: align_status")
+
+    n_aligned = (df["align_status"] == "success").sum()
+    print(f"  アライメント成功画像: {n_aligned}")
+
+    # AOI マスク読み込み
+    aoi_mask_path = output_dir / "aligned" / "aoi_mask.png"
+    if not aoi_mask_path.exists():
+        raise FileNotFoundError(f"AOIマスクが見つかりません: {aoi_mask_path}")
+
+    mask = load_aoi_mask(str(aoi_mask_path))
+    print(f"  AOIマスク: {mask.shape}, AOIピクセル={int(mask.sum())}")
+
+    # ディレクトリ確認
+    aligned_dir = output_dir / "aligned"
+    masks_dir = output_dir / "segment" / "masks"
+    snow_output_dir = output_dir / "snow"
+
+    if not masks_dir.exists():
+        raise FileNotFoundError(f"マスクディレクトリが見つかりません: {masks_dir}")
+
+    # --- snow() 実行 ---
+    print("\n雪検出を実行中...")
+    print("  手法: BDN (Blue Digital Number) 閾値法")
+    print("  閾値学習: SAM snow/mountain ヒストグラムからF1最大化")
+
+    snow_masks, stats_df = snow(
+        df,
+        aligned_dir=str(aligned_dir),
+        masks_dir=str(masks_dir),
+        mask=mask,
+        output_dir=str(snow_output_dir),
+    )
+
+    # --- 雪検出統計 ---
+    print("\n" + "-" * 80)
+    print("雪検出結果")
+    print("-" * 80)
+
+    if not stats_df.empty:
+        n_processed = len(stats_df)
+        src_counts = stats_df["threshold_source"].value_counts().to_dict()
+        mean_thr = stats_df["threshold"].mean()
+        mean_snow_ratio = stats_df["snow_ratio"].mean()
+
+        print(f"  処理画像数: {n_processed}")
+        print(f"  平均閾値: {mean_thr:.1f}")
+        print(f"  平均snow_ratio: {mean_snow_ratio:.4f}")
+        print(f"  閾値ソース内訳:")
+        for src, cnt in sorted(src_counts.items()):
+            print(f"    {src}: {cnt}")
+    else:
+        print("  処理された画像がありません")
+
+    # --- snowmelt 実行 (2-stage weighted change-point) ---
+    print("\n融雪日推定を実行中...")
+    print("  Stage 1: Image reliability weighting")
+    print("  Stage 2: Weighted Bernoulli change-point (daily aggregated)")
+
+    doy_map, conf_map = snowmelt(
+        snow_masks, stats_df, mask,
+        output_dir=str(snow_output_dir),
+        aligned_dir=str(aligned_dir),
+    )
+
+    # --- 融雪推定統計 ---
+    print("\n" + "-" * 80)
+    print("融雪推定結果")
+    print("-" * 80)
+
+    valid = doy_map[mask > 0]
+    n_melt = int(np.sum(valid > 0))
+    n_no_snow = int(np.sum(valid == 0))
+    n_persistent = int(np.sum(valid == -1))
+    n_total = len(valid)
+    print(f"  対象ピクセル数: {n_total}")
+    print(f"    melt:       {n_melt} ({n_melt/n_total*100:.1f}%)")
+    print(f"    no_snow:    {n_no_snow} ({n_no_snow/n_total*100:.1f}%)")
+    print(f"    persistent: {n_persistent} ({n_persistent/n_total*100:.1f}%)")
+
+    if n_melt > 0:
+        melt_doys = valid[valid > 0]
+        print(f"  融雪DOY: median={np.median(melt_doys):.0f}, "
+              f"min={np.min(melt_doys):.0f}, max={np.max(melt_doys):.0f}")
+
+    # --- stats_df を pipeline_result.csv にマージ ---
+    # snow_ratio は segment step の SAM snow 比率と衝突するため bdn_ プレフィックスで区別
+    bdn_cols = ["bdn_snow_ratio", "bdn_threshold", "bdn_threshold_source"]
+    df = df.drop(columns=[c for c in bdn_cols if c in df.columns])
+
+    if not stats_df.empty:
+        merge_df = stats_df[["filename", "snow_ratio", "threshold", "threshold_source"]].copy()
+        merge_df = merge_df.rename(columns={
+            "snow_ratio": "bdn_snow_ratio",
+            "threshold": "bdn_threshold",
+            "threshold_source": "bdn_threshold_source",
+        })
+        df = df.merge(merge_df, on="filename", how="left")
+
+    # --- 出力ファイル確認 ---
+    print("\n" + "=" * 60)
+    print("出力ファイル")
+    print("=" * 60)
+
+    if snow_output_dir.exists():
+        snow_mask_files = list((snow_output_dir / "masks").glob("*.npz")) if (snow_output_dir / "masks").exists() else []
+        preview_files = list((snow_output_dir / "previews").glob("*.jpg")) if (snow_output_dir / "previews").exists() else []
+        daily_previews = list((snow_output_dir / "daily_previews").glob("*.jpg")) if (snow_output_dir / "daily_previews").exists() else []
+        print(f"  雪マスク: {len(snow_mask_files)}枚")
+        print(f"  プレビュー: {len(preview_files)}枚")
+        print(f"  日次プレビュー: {len(daily_previews)}枚")
+        stats_csv = snow_output_dir / "snow_stats.csv"
+        if stats_csv.exists():
+            print(f"  統計CSV: {stats_csv}")
+        doy_map_path = snow_output_dir / "doy_map.png"
+        if doy_map_path.exists():
+            print(f"  DOYマップ: {doy_map_path}")
+        doy_npz = snow_output_dir / "doy_map.npz"
+        if doy_npz.exists():
+            print(f"  DOYデータ: {doy_npz}")
+
+    # CSVに保存（上書き）
+    df.to_csv(csv_path, index=False)
+    print(f"\n結果を保存: {csv_path}")
+
+
 def parse_step_range(step_arg: str) -> list[int]:
     """ステップ引数をパース（例: "1", "1-3", "2-4"）"""
     if "-" in step_arg:
@@ -424,15 +578,16 @@ Examples:
     python test_pipeline_step_by_step.py --step 2           # segmentのみ
     python test_pipeline_step_by_step.py --step 3           # pre_qc + 稜線検出
     python test_pipeline_step_by_step.py --step 4           # align
-    python test_pipeline_step_by_step.py --step 1-4         # step 1から4まで
+    python test_pipeline_step_by_step.py --step 5           # snow + snowmelt
+    python test_pipeline_step_by_step.py --step 1-5         # step 1から5まで
     python test_pipeline_step_by_step.py                    # 全ステップ
     python test_pipeline_step_by_step.py --data test_data_summer  # 別のデータ
         """
     )
     parser.add_argument(
         "--step", "-s",
-        default="1-4",
-        help="実行するステップ（例: 1, 2, 1-4）"
+        default="1-5",
+        help="実行するステップ（例: 1, 2, 1-5）"
     )
     parser.add_argument(
         "--data", "-d",
@@ -479,6 +634,9 @@ Examples:
     if 4 in steps:
         step4_align(output_dir, args.target_image)
 
+    if 5 in steps:
+        step5_snow(output_dir)
+
     # 完了メッセージ
     print("\n" + "=" * 60)
     print(f"Step {steps[0]}-{steps[-1]} 完了" if len(steps) > 1 else f"Step {steps[0]} 完了")
@@ -498,6 +656,9 @@ Examples:
         if "align_status" in df.columns:
             n_aligned = (df["align_status"] == "success").sum()
             print(f"アライメント成功: {n_aligned}")
+        if "bdn_snow_ratio" in df.columns:
+            valid = df["bdn_snow_ratio"].dropna()
+            print(f"雪検出済み: {len(valid)}枚, 平均snow_ratio: {valid.mean():.4f}")
         print(f"\n結果: {csv_path}")
 
 

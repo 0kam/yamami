@@ -94,8 +94,10 @@ def ingest(
     image_paths = _collect_image_paths(directory_path, patterns)
 
     # Build profile for each image
+    from tqdm import tqdm
+
     records = []
-    for path in image_paths:
+    for path in tqdm(image_paths, desc="ingest"):
         record = _build_image_record(
             path,
             timestamp_source=timestamp_source,

@@ -232,13 +232,20 @@ def ridge_qc(
         reflection_max=reflection_max,
     )
 
+    # Sort by timestamp so segment detection uses chronological order
+    if "timestamp" in result_df.columns:
+        result_df = result_df.sort_values("timestamp").reset_index(drop=True)
+
     # --- Step 2: Target ridgeline ---
     target_img = cv2.imread(str(target_path))
     if target_img is None:
         raise FileNotFoundError(f"Target image not found: {target_path}")
 
     target_basename = target_path.stem
-    target_sam_ridge = get_sam_ridge(masks_dir / f"{target_basename}_mountain.npz")
+    target_sam_ridge = get_sam_ridge(
+        masks_dir / f"{target_basename}_mountain.npz",
+        snow_mask_path=masks_dir / f"{target_basename}_snow.npz",
+    )
     target_sky_mask = load_mask(masks_dir / f"{target_basename}_sky.npz")
     target_cloud_mask = load_mask(masks_dir / f"{target_basename}_cloud.npz")
 
@@ -261,6 +268,11 @@ def ridge_qc(
 
     thumb_scale = 0.15
 
+    from tqdm import tqdm
+
+    usable_total = int(result_df["is_usable"].sum())
+    pbar = tqdm(total=usable_total, desc="ridge_qc")
+
     for _, row in result_df.iterrows():
         filepath = row["path"]
         basename = Path(filepath).stem
@@ -279,6 +291,12 @@ def ridge_qc(
             "match_success": False,
             "prev_displacement": np.nan,
         }
+
+        if not row["is_usable"]:
+            match_results.append(default)
+            continue
+
+        pbar.update(1)
 
         img = cv2.imread(filepath)
         if img is None:
@@ -300,20 +318,23 @@ def ridge_qc(
                 grid_thumbs.append((thumb, len(match_results) - 1))
             continue
 
-        sam_ridge = get_sam_ridge(masks_dir / f"{basename}_mountain.npz")
+        sam_ridge = get_sam_ridge(
+            masks_dir / f"{basename}_mountain.npz",
+            snow_mask_path=masks_dir / f"{basename}_snow.npz",
+        )
         sky_mask = load_mask(masks_dir / f"{basename}_sky.npz")
         cloud_mask = load_mask(masks_dir / f"{basename}_cloud.npz")
-
         ridge, method_name, blue_ratio = detect_ridgeline(
             img, sam_ridge, sky_mask, cloud_mask,
             search_margin=search_margin,
             blue_ratio_threshold=blue_ratio_threshold,
         )
 
+        ratio_thresh = inlier_ratio_threshold
         mr = match_ridgelines_ransac(
             target_ridge, ridge,
             inlier_threshold=inlier_threshold,
-            inlier_ratio_threshold=inlier_ratio_threshold,
+            inlier_ratio_threshold=ratio_thresh,
         )
 
         match_results.append({
@@ -362,6 +383,8 @@ def ridge_qc(
                 _put_text(thumb, status, (10, 65), fg=color)
 
             grid_thumbs.append((thumb, len(match_results) - 1))
+
+    pbar.close()
 
     # --- Step 4: Segment detection ---
     segment_info = detect_segments(

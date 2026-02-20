@@ -25,7 +25,7 @@ Example usage:
 __version__ = "0.1.0"
 
 from yamami.align import align
-from yamami.aoi import aoi
+from yamami.aoi import aoi, load_aoi_mask
 from yamami.export import export
 from yamami.ingest import ingest
 from yamami.logging import get_logger
@@ -50,6 +50,7 @@ __all__ = [
     "__version__",
     "align",
     "aoi",
+    "load_aoi_mask",
     "compute_blue_ratio",
     "create_grid_image",
     "detect_ridgeline",

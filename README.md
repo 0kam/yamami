@@ -214,7 +214,97 @@ skyline, aoi_mask = aoi(ref_image="reference.jpg", output_dir="./output")
 - `skyline`: DataFrame（x, y座標）
 - `aoi_mask`: バイナリマスク（ndarray）
 
-### 7. 緑度比計算（gr）
+### 7. 積雪解析（snow/snowmelt）
+
+積雪解析は **雪検出（snow）** と **消雪日推定（snowmelt）** の2段階で構成されます。
+
+#### 7.1 雪検出（snow）
+
+BDN（Blue Digital Number）閾値法により、各画像の各ピクセルを雪/非雪に分類します。
+
+```python
+from yamami import snow, snowmelt
+
+snow_masks, stats_df = snow(
+    df=df,
+    aligned_dir="./output/aligned",
+    masks_dir="./output/segment/masks",
+    mask=aoi_mask,
+    output_dir="./output/snow",
+)
+```
+
+**閾値決定の3パス処理:**
+
+1. **Pass 1 — 閾値学習**: SAMセグメンテーションで snow と mountain の両ラベルを持つ画像について、Blue チャンネルのヒストグラムからF1スコアを最大化する閾値を探索（F1 ≥ 0.5 のもののみ採用）
+2. **Pass 2 — ヒストグラムベース閾値借用**: 閾値が学習できなかった画像に対し、AOI内のBlueチャンネルヒストグラムが最も類似した学習済み画像の閾値を借用（`cv2.compareHist` の相関係数で類似度を評価。フォールバックとして時間的最近傍も使用）
+3. **Pass 3 — 雪分類**: 各画像で Blue ≥ threshold かつ有効マスク内のピクセルを雪と判定
+
+**snow() の出力:**
+- `snow_masks`: `{filename: bool_mask}` — 各画像の雪マスク
+- `stats_df`: 画像ごとの統計 DataFrame
+  - `snow_ratio`: AOI内の積雪率
+  - `threshold`: 使用した BDN 閾値
+  - `threshold_source`: 閾値の出典（`"learned"`, `"histogram"`, `"nearest"`, `"fallback"`）
+  - `fit_f1`: 閾値学習時の F1 スコア（learned のみ）
+
+#### 7.2 消雪日推定（snowmelt）
+
+ノイジーな二値時系列から、各ピクセルの消雪日（Day of Year）を推定します。
+
+```python
+doy_map, confidence_map = snowmelt(
+    snow_masks=snow_masks,
+    stats_df=stats_df,
+    mask=aoi_mask,
+    output_dir="./output/snow",
+    aligned_dir="./output/aligned",
+)
+```
+
+**物理的前提**: 雪は一度溶けたら再び積もらない（単調減少）
+
+**ノイズ特性**: 偽陽性（FP）が支配的 — 霧・逆光で画像全体が高輝度になり雪と誤判定される。FPは画像レベルで相関。
+
+**2段階アルゴリズム:**
+
+**Stage 1 — 画像レベル信頼度重み付け**
+
+各画像に信頼度ウェイトを付与し、不信頼な観測の影響を抑制：
+
+| 要因 | 方法 |
+|------|------|
+| 閾値ソース品質 | learned=1.0, histogram=0.5, nearest=0.3, fallback=0.1 |
+| F1スコア | learned画像のみ、F1値でスケーリング |
+| Isotonic残差 | 画像レベルsnow_ratioに単調非増加回帰を適用し、単調トレンドを超える画像（FP候補）をexp(-5·residual)でペナルティ |
+
+**Stage 2 — 重み付きベルヌーイ変化点検出**
+
+1. **日単位集約**: 同日の複数画像の観測を重みで集約（日単位の重み付き雪カウント）
+2. **変化点探索**: 各ピクセルについて、全候補日 k で2セグメントベルヌーイモデルの対数尤度を計算
+   - 消雪前: P(snow=1) = p_high
+   - 消雪後: P(snow=1) = p_low（FP率、0より大きい）
+   - 最尤の k が消雪日
+3. **信頼度**: 2セグメントモデルの対数尤度改善量と (p_high - p_low) の差から算出
+4. **分類**:
+   - p_high < 0.3 → 元々雪なし（DOY = 0）
+   - p_low > 0.7 → 永続積雪（DOY = -1）
+   - それ以外 → 消雪日（DOY = 正の値）
+
+> **なぜベルヌーイ変化点か？** FPが画像レベルで相関する（霧の日は全ピクセル同時にFP）ため、単純な「最後の雪観測日」は使えません。ベルヌーイモデルは消雪後のFP率 p_low を明示的に推定するため、散発的なFPに頑健です。
+
+**snowmelt() の出力:**
+- `doy_map`: `(H, W)` float32 — ピクセルごとの消雪DOY
+  - 正の値: 消雪日（Day of Year）
+  - 0: 元々雪なし
+  - -1: 永続積雪
+  - NaN: AOI外
+- `confidence_map`: `(H, W)` float32 — 信頼度 [0, 1]
+- `doy_map.png`: DOYカラーマップ画像（JETカラーマップ）
+- `doy_map.npz`: 数値データ（doy, confidence）
+- `daily_previews/`: 各日のアライメント済み画像とモデル予測雪マスクの並列プレビュー
+
+### 8. 緑度比計算（gr）
 
 ```python
 from yamami import gr
@@ -232,7 +322,7 @@ daily_images, timeseries = gr(
 GR = G / (R + G + B)
 ```
 
-### 8. フェノロジー解析（phenology）
+### 9. フェノロジー解析（phenology）
 
 ダブルシグモイドモデルによる曲線フィッティング:
 
@@ -260,32 +350,6 @@ f(t) = base + amp1/(1+exp(-k1*(t-t1))) - amp2/(1+exp(-k2*(t-t2)))
 - `fit_rmse`: フィッティング誤差
 - `fit_status`: フィッティング状態
 
-### 9. 積雪解析（snow/snowmelt）
-
-```python
-from yamami import snow, snowmelt
-
-# 積雪検出（大津法による自動閾値決定）
-snow_masks, thresholds = snow(
-    profile=df,
-    aoi_mask=aoi_mask,
-    otsu=True,
-    output_dir="./output"
-)
-
-# 融雪日の推定
-melt = snowmelt(
-    snow_masks=snow_masks,
-    aoi_mask=aoi_mask,
-    output_dir="./output"
-)
-```
-
-**snowmelt DataFrame の出力カラム:**
-- `row`, `col`: ピクセル座標
-- `doy`: 融雪日（Day of Year）
-- `confidence`: 信頼度
-- `status`: 状態（"melted", "no_snow", "persistent_snow", "uncertain"）
 
 ### 10. 可視化（viz）
 

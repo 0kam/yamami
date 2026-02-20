@@ -385,6 +385,10 @@ def align(
     with open(params_path, "w") as f:
         json.dump(params_data, f, indent=2, default=str)
 
+    # --- Save editable AOI mask ---
+    target_basename = Path(target_image).stem
+    _save_aoi_mask_png(target_img, aligned_dir, masks_dir, target_basename)
+
     n_success = sum(
         1 for s in segment_results.values() if s["status"] == "success"
     )
@@ -394,6 +398,79 @@ def align(
     )
 
     return result_df
+
+
+# =============================================================================
+# AOI mask generation
+# =============================================================================
+
+
+def _save_aoi_mask_png(
+    target_img: np.ndarray,
+    aligned_dir: Path,
+    masks_dir: Path,
+    target_basename: str,
+) -> None:
+    """Save editable AOI mask PNG to aligned directory.
+
+    Detects the skyline using SAM-guided ridgeline detection from
+    ``ridgeline.detect_ridgeline``, blacks out the sky region above,
+    and saves as ``aoi_mask.png``.  Users can later open this PNG in
+    an image editor to paint additional exclusion regions in black
+    (0,0,0).
+
+    Pixels that are originally (0,0,0) in the AOI region are nudged to
+    (1,0,0) to avoid false exclusion.
+
+    Args:
+        target_img: Target image (BGR, uint8).
+        aligned_dir: Directory to save aoi_mask.png.
+        masks_dir: Directory containing SAM mask .npz files.
+        target_basename: Stem of the target image filename (no extension).
+    """
+    from yamami.ridgeline import detect_ridgeline, get_sam_ridge, load_mask
+
+    h, w = target_img.shape[:2]
+
+    # Load SAM masks for the target image (same coordinate system)
+    sam_ridge = get_sam_ridge(
+        masks_dir / f"{target_basename}_mountain.npz",
+        masks_dir / f"{target_basename}_snow.npz",
+    )
+    sky_mask = load_mask(masks_dir / f"{target_basename}_sky.npz")
+    cloud_mask = load_mask(masks_dir / f"{target_basename}_cloud.npz")
+
+    ridgeline, method, blue_ratio = detect_ridgeline(
+        target_img, sam_ridge, sky_mask, cloud_mask,
+    )
+    logger.info(
+        f"AOI ridgeline: method={method}, blue_ratio={blue_ratio:.3f}"
+    )
+
+    # Build sky region mask from ridgeline
+    # Columns with ridgeline[x] < 0: fall back to SAM sky mask
+    sky_region = np.zeros((h, w), dtype=bool)
+    valid = ridgeline >= 0
+    rows = np.arange(h)[:, None]
+    sky_region[:, valid] = rows < ridgeline[None, valid]
+
+    if sky_mask is not None:
+        sky_region[:, ~valid] = sky_mask[:, ~valid]
+
+    masked = target_img.copy()
+
+    # Nudge original (0,0,0) pixels in AOI region to (1,0,0)
+    # to prevent false exclusion when user edits the mask
+    aoi_region = ~sky_region
+    black_in_aoi = aoi_region & np.all(masked == 0, axis=2)
+    masked[black_in_aoi] = [1, 0, 0]
+
+    # Black out sky region
+    masked[sky_region] = 0
+
+    mask_path = aligned_dir / "aoi_mask.png"
+    cv2.imwrite(str(mask_path), masked)
+    logger.info(f"Saved editable AOI mask to {mask_path}")
 
 
 # =============================================================================
@@ -1372,9 +1449,11 @@ def _warp_segment_images(
         map_y: Distortion remap table (y), or None.
         aligned_dir: Output directory.
     """
+    from tqdm import tqdm
+
     seg_df = df[df["segment_id"] == segment_id]
 
-    for _, row in seg_df.iterrows():
+    for _, row in tqdm(seg_df.iterrows(), desc=f"warp seg{segment_id}", total=len(seg_df)):
         filepath = row["path"]
         output_path = Path(aligned_dir) / Path(filepath).name
 

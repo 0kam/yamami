@@ -187,14 +187,13 @@ class TestFullWorkflow:
 
         df.to_csv(output_dir / "aligned_result.csv", index=False)
 
-        # Step 5: AOI Extraction
-        aoi_out = output_dir / "aoi"
-        skyline, aoi_mask = yamami.aoi(target_image, output_dir=str(aoi_out))
+        # Step 5: AOI Extraction (from aoi_mask.png saved by align)
+        aoi_mask_path = aligned_dir / "aoi_mask.png"
+        assert aoi_mask_path.exists()
+        aoi_mask = yamami.load_aoi_mask(str(aoi_mask_path))
 
-        assert isinstance(skyline, pd.DataFrame)
-        assert "x" in skyline.columns
-        assert "y" in skyline.columns
         assert isinstance(aoi_mask, np.ndarray)
+        assert aoi_mask.dtype == bool
         assert aoi_mask.sum() > 0
 
         # Step 6: GR + Phenology
@@ -227,12 +226,14 @@ class TestFullWorkflow:
 
         # Step 7: Snow + Snowmelt
         snow_out = output_dir / "snow"
-        snow_masks, thresholds = yamami.snow(
+        snow_masks, snow_stats = yamami.snow(
             aligned_df,
-            aoi_mask,
+            aligned_dir=str(aligned_dir),
+            masks_dir=str(masks_dir),
+            mask=aoi_mask,
             output_dir=str(snow_out),
         )
-        thresholds.to_csv(snow_out / "thresholds.csv", index=False)
+        snow_stats.to_csv(snow_out / "snow_stats.csv", index=False)
 
         assert len(snow_masks) > 0
 

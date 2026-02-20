@@ -3,16 +3,24 @@ Semantic segmentation module for yamami.
 
 Provides image segmentation using Meta SAM 3 with text prompts
 (e.g., sky, cloud, fog, snow).
+
+Performance optimizations:
+- Strategy A: Image encoder runs once per image; state is deepcopied per prompt
+- Strategy B: PyTorch DataLoader prefetches images from disk in worker processes
+- Strategy C: Mask saving runs in background threads via ThreadPoolExecutor
 """
 
 from __future__ import annotations
 
+import copy
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import numpy as np
 import pandas as pd
+from torch.utils.data import DataLoader, Dataset
 
 from yamami.logging import get_logger
 
@@ -192,44 +200,84 @@ def _combine_instance_masks(masks: np.ndarray) -> np.ndarray:
         return np.any(masks, axis=tuple(range(masks.ndim - 2)))
 
 
+# ---------------------------------------------------------------------------
+# Strategy B: PyTorch DataLoader for I/O prefetching
+# ---------------------------------------------------------------------------
+
+class _ImageDataset(Dataset):
+    """PyTorch Dataset that prefetches image reading and resizing in workers."""
+
+    def __init__(self, filepaths: list[str], resize: int):
+        self.filepaths = filepaths
+        self.resize = resize
+
+    def __len__(self) -> int:
+        return len(self.filepaths)
+
+    def __getitem__(self, idx: int) -> tuple:
+        filepath = self.filepaths[idx]
+        img_bgr = cv2.imread(filepath)
+        if img_bgr is None:
+            return filepath, None, None, 1.0
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        resized_rgb, scale = _resize_for_inference(img_rgb, self.resize)
+        return filepath, img_bgr, resized_rgb, scale
+
+
+def _collate_passthrough(batch: list) -> tuple:
+    """Pass through a single item without default tensor conversion."""
+    return batch[0]
+
+
+# ---------------------------------------------------------------------------
+# Strategy A: Image encoder runs once; deepcopy state for each prompt
+# ---------------------------------------------------------------------------
+
 def _segment_single_image(
-    img: np.ndarray,
+    resized_rgb: np.ndarray,
+    original_hw: tuple[int, int],
     prompts: list[str],
     model_bundle: tuple,
-    resize: int,
-    device: str,
+    scale: float,
 ) -> dict[str, np.ndarray]:
     """
     Segment a single image using SAM3 text prompts.
 
+    Encodes the image once via set_image(), then deepcopies the state
+    for each prompt to avoid re-running the expensive backbone encoder.
+
     Args:
-        img: Input image (BGR).
+        resized_rgb: Pre-resized RGB image for inference.
+        original_hw: Original image (height, width) for mask upscaling.
         prompts: Text prompts.
         model_bundle: (model, processor)
-        resize: Max side length for inference (0 = no resize).
-        device: Device string.
+        scale: Resize scale factor (1.0 = no resize).
 
     Returns:
-        dict: prompt -> binary mask (bool array)
+        dict: prompt -> binary mask (bool array at original resolution)
     """
     from PIL import Image
 
     _, processor = model_bundle
 
-    original_h, original_w = img.shape[:2]
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    infer_img, scale = _resize_for_inference(img_rgb, resize)
-    pil_img = Image.fromarray(infer_img)
+    pil_img = Image.fromarray(resized_rgb)
 
+    # Strategy A: encode image once (expensive backbone forward pass)
+    base_state = processor.set_image(pil_img)
+
+    original_h, original_w = original_hw
     masks_dict: dict[str, np.ndarray] = {}
+
     for prompt in prompts:
-        # Create fresh inference state for each prompt to avoid state pollution
-        inference_state = processor.set_image(pil_img)
-        output = processor.set_text_prompt(state=inference_state, prompt=prompt)
+        # SAM3's set_text_prompt mutates the state, so deepcopy before each call.
+        # deepcopy copies GPU tensors via CUDA memcpy which is far cheaper than
+        # re-running the backbone encoder.
+        state = copy.deepcopy(base_state)
+        output = processor.set_text_prompt(state=state, prompt=prompt)
         masks = _extract_masks(output)
         combined = _combine_instance_masks(masks)
         if combined is None:
-            mask_bool = np.zeros(infer_img.shape[:2], dtype=bool)
+            mask_bool = np.zeros(resized_rgb.shape[:2], dtype=bool)
         else:
             mask_bool = combined > 0
 
@@ -279,6 +327,7 @@ def segment(
     resize: int = 512,
     device: str = "auto",
     output_dir: Optional[str] = None,
+    num_workers: int = 2,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Run semantic segmentation on images using SAM3.
@@ -294,6 +343,8 @@ def segment(
         device: Device for model inference ("auto", "cpu", or "cuda").
             Default is "auto".
         output_dir: Optional directory to save segmentation outputs.
+        num_workers: Number of DataLoader workers for I/O prefetching.
+            Default is 2. Set to 0 to disable prefetching.
 
     Returns:
         tuple: (labels_df, masks_dict)
@@ -315,14 +366,30 @@ def segment(
 
     model_bundle = _load_models(resolved_device)
 
+    # Strategy B: DataLoader for I/O prefetching
+    filepaths = profile["path"].tolist()
+    dataset = _ImageDataset(filepaths, resize)
+    loader_kwargs: dict = dict(
+        batch_size=1,
+        num_workers=num_workers,
+        collate_fn=_collate_passthrough,
+    )
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["persistent_workers"] = True
+    loader = DataLoader(dataset, **loader_kwargs)
+
+    # Strategy C: async mask saving in background threads
+    save_executor = ThreadPoolExecutor(max_workers=2) if output_dir is not None else None
+    save_futures: list[Future] = []
+
     labels_data = []
     masks_dict = {}
 
-    for _, row in profile.iterrows():
-        filepath = row["path"]
+    from tqdm import tqdm
 
-        img = cv2.imread(filepath)
-        if img is None:
+    for filepath, img_bgr, resized_rgb, scale in tqdm(loader, desc="segment", total=len(dataset)):
+        if img_bgr is None:
             logger.warning(f"Failed to read image: {filepath}")
             for prompt in prompts:
                 labels_data.append({
@@ -330,11 +397,10 @@ def segment(
                     "prompt": prompt,
                     "ratio": 0.0,
                 })
-            masks_dict[filepath] = {p: np.zeros((1, 1), dtype=bool) for p in prompts}
             continue
 
         mask_entry = _segment_single_image(
-            img, prompts, model_bundle, resize, resolved_device
+            resized_rgb, img_bgr.shape[:2], prompts, model_bundle, scale
         )
 
         for prompt in prompts:
@@ -345,10 +411,24 @@ def segment(
                 "ratio": ratio,
             })
 
-        masks_dict[filepath] = mask_entry
+        if output_dir is not None and save_executor is not None:
+            # Strategy C: submit save to background thread
+            future = save_executor.submit(
+                _save_masks, filepath, mask_entry, output_dir, color_map,
+                original_img=img_bgr,
+            )
+            save_futures.append(future)
+            # Backpressure: prevent unbounded memory from queued saves
+            while len(save_futures) > 8:
+                save_futures.pop(0).result()
+        else:
+            masks_dict[filepath] = mask_entry
 
-        if output_dir is not None:
-            _save_masks(filepath, mask_entry, output_dir, color_map, original_img=img)
+    # Wait for remaining saves to complete
+    for future in save_futures:
+        future.result()
+    if save_executor is not None:
+        save_executor.shutdown(wait=True)
 
     labels = pd.DataFrame(labels_data)
 

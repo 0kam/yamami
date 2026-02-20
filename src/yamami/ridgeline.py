@@ -54,6 +54,13 @@ def compute_blue_ratio(
 # =============================================================================
 
 
+def _search_bounds(sam_ridge, x, h, search_margin):
+    """Return (start, end) search range for column *x*."""
+    if sam_ridge is not None and sam_ridge[x] >= 0:
+        return max(0, sam_ridge[x] - search_margin), min(h, sam_ridge[x] + search_margin)
+    return 0, h // 2
+
+
 def _find_ridge_from_gradient(
     grad_y: np.ndarray, sam_ridge: np.ndarray, search_margin: int = 10
 ) -> np.ndarray:
@@ -62,18 +69,14 @@ def _find_ridge_from_gradient(
     ridgeline = np.full(w, -1, dtype=np.int32)
 
     for x in range(w):
-        if sam_ridge is not None and sam_ridge[x] >= 0:
-            search_start = max(0, sam_ridge[x] - search_margin)
-            search_end = min(h, sam_ridge[x] + search_margin)
-        else:
-            search_start = 0
-            search_end = h // 2
-
-        col = grad_y[search_start:search_end, x]
+        s, e = _search_bounds(sam_ridge, x, h, search_margin)
+        col = grad_y[s:e, x]
         if len(col) > 0:
-            ridgeline[x] = search_start + np.argmin(col)
+            ridgeline[x] = s + np.argmin(col)
 
     return ridgeline
+
+
 
 
 def method_sky_index(
@@ -97,6 +100,8 @@ def method_blue_gradient(
     return _find_ridge_from_gradient(grad_y, sam_ridge, search_margin)
 
 
+
+
 def detect_ridgeline(
     img: np.ndarray,
     sam_ridge: np.ndarray,
@@ -107,9 +112,9 @@ def detect_ridgeline(
 ) -> tuple:
     """Adaptive ridgeline detection.
 
-    Selects method based on blue ratio:
-        blue_ratio > threshold -> Sky Index
-        otherwise -> Blue Gradient
+    Method selection:
+        blue_ratio > threshold    -> Sky Index
+        otherwise                 -> Blue Gradient
 
     Args:
         img: BGR image.
@@ -462,11 +467,17 @@ def detect_segments(results, width, height, ridge_cy, displacement_threshold=5.0
 # =============================================================================
 
 
-def get_sam_ridge(mask_path):
+def get_sam_ridge(mask_path, snow_mask_path=None):
     """Extract approximate ridgeline from SAM mountain mask.
 
+    When *snow_mask_path* is provided, the snow mask is combined with
+    the mountain mask before extracting the ridge.  This prevents the
+    ridge from being lost when SAM classifies snow-covered mountain
+    pixels as "snow" instead of "mountain".
+
     Args:
-        mask_path: Path to .npz file containing ``mask`` array.
+        mask_path: Path to mountain .npz file containing ``mask`` array.
+        snow_mask_path: Optional path to snow .npz file.
 
     Returns:
         Per-column y coordinate array (int32), or None if file missing.
@@ -476,6 +487,14 @@ def get_sam_ridge(mask_path):
         return None
 
     mask = np.load(mask_path)["mask"]
+
+    if snow_mask_path is not None:
+        snow_path = Path(snow_mask_path)
+        if snow_path.exists():
+            snow_mask = np.load(snow_path)["mask"]
+            if snow_mask.shape == mask.shape:
+                mask = mask | snow_mask
+
     h, w = mask.shape
     ridge = np.full(w, -1, dtype=np.int32)
 

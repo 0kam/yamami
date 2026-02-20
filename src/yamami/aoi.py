@@ -17,11 +17,53 @@ from yamami.logging import get_logger
 logger = get_logger(__name__)
 
 
+def load_aoi_mask(aoi_mask_path: str) -> np.ndarray:
+    """Load AOI mask from user-editable PNG.
+
+    Reads the AOI mask PNG (saved by align()) and converts it to a boolean
+    mask. Black pixels (0,0,0) are treated as excluded (False), all other
+    pixels are included (True).
+
+    Args:
+        aoi_mask_path: Path to the aoi_mask.png file.
+
+    Returns:
+        Boolean mask array of shape (H, W) where True = AOI.
+
+    Raises:
+        FileNotFoundError: If the mask file does not exist.
+        ValueError: If the mask file cannot be read or is invalid.
+    """
+    path = Path(aoi_mask_path)
+    if not path.exists():
+        raise FileNotFoundError(f"AOI mask not found: {aoi_mask_path}")
+
+    img = cv2.imread(str(path))
+    if img is None:
+        raise ValueError(f"Could not read AOI mask: {aoi_mask_path}")
+
+    if img.ndim != 3 or img.shape[2] != 3:
+        raise ValueError(
+            f"AOI mask must be a 3-channel image, got shape {img.shape}"
+        )
+
+    mask = np.any(img > 0, axis=2)
+    logger.info(
+        f"Loaded AOI mask from {path}: shape={mask.shape}, "
+        f"AOI pixels={int(mask.sum())}"
+    )
+    return mask
+
+
 def aoi(
     ref_image: str, output_dir: Optional[str] = None
 ) -> tuple[pd.DataFrame, np.ndarray]:
     """
     Extract skyline and create AOI mask.
+
+    .. deprecated::
+        Use ``align()`` which now saves ``aoi_mask.png`` automatically,
+        then load it with ``load_aoi_mask()``.
 
     Detects the skyline using blue channel gradient analysis and creates
     a binary mask where the AOI (area below skyline) is marked.
