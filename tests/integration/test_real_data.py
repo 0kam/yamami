@@ -208,8 +208,8 @@ class TestFullWorkflow:
             aligned_df,
             aoi_mask > 0,
             output_dir=str(gr_out),
+            aligned_dir=str(aligned_dir),
         )
-        gr_ts.to_csv(gr_out / "gr_timeseries.csv", index=False)
 
         assert isinstance(gr_ts, pd.DataFrame)
         assert "date" in gr_ts.columns
@@ -217,12 +217,24 @@ class TestFullWorkflow:
         assert "mean_gr" in gr_ts.columns
 
         if not gr_ts.empty:
+            # Mean phenology (double-sigmoid)
             pheno = yamami.phenology(gr_ts)
             pheno_out = output_dir / "phenology"
             pheno_out.mkdir(parents=True, exist_ok=True)
             pheno.to_csv(pheno_out / "phenology.csv", index=False)
 
             assert "fit_status" in pheno.columns
+
+            # Pixel-level phenology (threshold method)
+            pheno_pixel = yamami.phenology(
+                str(gr_out),
+                timeseries=gr_ts,
+                aoi_mask=aoi_mask > 0,
+                method="threshold",
+                output_dir=str(output_dir / "phenology_pixel"),
+            )
+            assert "gup_doy" in pheno_pixel.columns
+            assert len(pheno_pixel) > 0
 
         # Step 7: Snow + Snowmelt
         snow_out = output_dir / "snow"
