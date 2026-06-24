@@ -5,14 +5,16 @@ Provides image segmentation using Meta SAM 3 with text prompts
 (e.g., sky, cloud, fog, snow).
 
 Performance optimizations:
-- Strategy A: Image encoder runs once per image; state is deepcopied per prompt
-- Strategy B: PyTorch DataLoader prefetches images from disk in worker processes
-- Strategy C: Mask saving runs in background threads via ThreadPoolExecutor
+- Strategy A: Instance prompts share one image encoder pass per image
+- Strategy B: Score-map prompts share tiled image encoder passes
+- Strategy C: PyTorch DataLoader prefetches images from disk in worker processes
+- Strategy D: Mask saving runs in background threads via ThreadPoolExecutor
 """
 
 from __future__ import annotations
 
 import copy
+import os
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -27,7 +29,20 @@ from yamami.logging import get_logger
 logger = get_logger(__name__)
 
 # Default prompts for semantic segmentation (order = priority, first is highest)
-DEFAULT_PROMPTS = ["fog", "cloud", "sky", "sun", "reflection"]
+DEFAULT_PROMPTS = [
+    "fog",
+    "cloud",
+    "sky",
+    "sun",
+    "reflection",
+    "snow",
+    "mountain",
+]
+DEFAULT_MODE = {
+    "default": "fused",
+    "fog": "instance",
+    "cloud": "semantic_only",
+}
 
 # Default color map (BGR format) - will be auto-generated if not specified
 DEFAULT_COLORS = {
@@ -42,6 +57,14 @@ DEFAULT_COLORS = {
 
 # Global model cache to avoid reloading
 _model_cache: dict = {}
+
+SUPPORTED_MODES = {
+    "instance",
+    "instance_only",
+    "semantic",
+    "semantic_only",
+    "fused",
+}
 
 
 def _generate_colors(prompts: list[str], user_colors: Optional[dict] = None) -> dict:
@@ -105,17 +128,39 @@ def _get_device(device: str) -> str:
     return device
 
 
-def _load_models(device: str) -> tuple:
+def _resolve_checkpoint_path(checkpoint_path: Optional[str]) -> Optional[str]:
+    """
+    Resolve the SAM3 checkpoint path from argument or SAM3_CHECKPOINT_PATH env var.
+
+    Returns None when neither is set (caller will fall back to HF download).
+    Raises FileNotFoundError if a path is provided but does not exist.
+    """
+    resolved = checkpoint_path or os.environ.get("SAM3_CHECKPOINT_PATH")
+    if resolved is None:
+        return None
+    if not Path(resolved).is_file():
+        raise FileNotFoundError(
+            f"SAM3 checkpoint not found: {resolved}. "
+            "Set SAM3_CHECKPOINT_PATH or pass checkpoint_path to a valid sam3.pt file."
+        )
+    return resolved
+
+
+def _load_models(device: str, checkpoint_path: Optional[str] = None) -> tuple:
     """
     Load or retrieve cached SAM3 model and processor.
 
     Args:
         device: "cuda" or "cpu". SAM3 requires CUDA.
+        checkpoint_path: Optional path to a local sam3.pt checkpoint. When
+            omitted, falls back to the SAM3_CHECKPOINT_PATH environment
+            variable, and finally to HuggingFace download (gated by Meta).
 
     Returns:
         tuple: (model, processor)
     """
-    cache_key = f"sam3:{device}"
+    resolved_ckpt = _resolve_checkpoint_path(checkpoint_path)
+    cache_key = f"sam3:{device}:{resolved_ckpt or 'hf'}"
     if cache_key in _model_cache:
         return _model_cache[cache_key]
 
@@ -133,14 +178,261 @@ def _load_models(device: str) -> tuple:
             "Install from https://github.com/facebookresearch/sam3"
         ) from e
 
-    logger.info("Loading SAM3 image model")
-    model = build_sam3_image_model()
+    if resolved_ckpt is not None:
+        logger.info(f"Loading SAM3 image model from local checkpoint: {resolved_ckpt}")
+        model = build_sam3_image_model(
+            checkpoint_path=resolved_ckpt,
+            load_from_HF=False,
+        )
+    else:
+        logger.info("Loading SAM3 image model (HuggingFace download)")
+        model = build_sam3_image_model()
     model.to(device)
     model.eval()
     processor = Sam3Processor(model)
 
     _model_cache[cache_key] = (model, processor)
     return model, processor
+
+
+def _normalise_modes(
+    prompts: list[str],
+    mode: str | dict[str, str],
+) -> dict[str, str]:
+    """Resolve per-prompt SAM3 output mode."""
+    if isinstance(mode, str):
+        mapping = {prompt: mode for prompt in prompts}
+    else:
+        default_mode = mode.get("default", "fused")
+        mapping = {
+            prompt: mode.get(prompt, default_mode)
+            for prompt in prompts
+        }
+
+    aliases = {
+        "semantic": "semantic_only",
+    }
+    mapping = {
+        prompt: aliases.get(str(mode).lower(), str(mode).lower())
+        for prompt, mode in mapping.items()
+    }
+    unsupported = sorted(set(mapping.values()) - SUPPORTED_MODES)
+    if unsupported:
+        raise ValueError(
+            f"Unsupported SAM3 prompt mode(s): {unsupported}. "
+            f"Supported modes: {sorted(SUPPORTED_MODES)}"
+        )
+    return mapping
+
+
+def _normalise_prompt_floats(
+    prompts: list[str],
+    value: float | dict[str, float],
+    default: float,
+) -> dict[str, float]:
+    if isinstance(value, dict):
+        default_value = float(value.get("default", default))
+        return {
+            prompt: float(value.get(prompt, default_value))
+            for prompt in prompts
+        }
+    return {prompt: float(value) for prompt in prompts}
+
+
+def _combine_score_branches(
+    inst_score,
+    semantic_score,
+    score_mode: str,
+):
+    if score_mode == "instance_only":
+        return inst_score
+    if score_mode == "semantic_only":
+        return semantic_score
+    return inst_score.maximum(semantic_score)
+
+
+def _tile_origins(length: int, crop: int, stride: int) -> list[int]:
+    if crop <= 0 or length <= crop:
+        return [0]
+    origins = list(range(0, length - crop + 1, stride))
+    last = length - crop
+    if origins[-1] != last:
+        origins.append(last)
+    return origins
+
+
+def _sam3_score_batch(
+    pil_imgs: list,
+    prompts: list[str],
+    model_bundle: tuple,
+    device: str,
+    mode_map: dict[str, str],
+    confidence_map: dict[str, float],
+) -> dict[str, list[np.ndarray]]:
+    """Return per-pixel SAM3 score maps for image batch x prompts."""
+    import torch
+    import torch.nn.functional as F
+    from sam3.model.data_misc import FindStage
+
+    _, processor = model_bundle
+    sizes = [img.size for img in pil_imgs]
+    image_count = len(pil_imgs)
+    prompt_count = len(prompts)
+    combo_count = image_count * prompt_count
+
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        state = processor.set_image_batch(pil_imgs)
+        text_outputs = processor.model.backbone.forward_text(
+            prompts, device=device,
+        )
+        state["backbone_out"].update(text_outputs)
+        geometric_prompt = processor.model._get_dummy_prompt(
+            num_prompts=combo_count,
+        )
+        find_stage = FindStage(
+            img_ids=torch.arange(
+                image_count, device=device, dtype=torch.long,
+            ).repeat_interleave(prompt_count),
+            text_ids=torch.arange(
+                prompt_count, device=device, dtype=torch.long,
+            ).repeat(image_count),
+            input_boxes=None,
+            input_boxes_mask=None,
+            input_boxes_label=None,
+            input_points=None,
+            input_points_mask=None,
+        )
+        outputs = processor.model.forward_grounding(
+            backbone_out=state["backbone_out"],
+            find_input=find_stage,
+            geometric_prompt=geometric_prompt,
+            find_target=None,
+        )
+
+        logits = outputs["pred_logits"].sigmoid().squeeze(-1).float()
+        presence = outputs["presence_logit_dec"].sigmoid().float().flatten()
+        logits = logits * presence.view(-1, 1)
+
+        inst_masks = outputs.get("pred_masks")
+        semantic_masks = outputs.get("semantic_seg")
+
+        scores: dict[str, list[np.ndarray]] = {
+            prompt: [] for prompt in prompts
+        }
+        for image_idx, (width, height) in enumerate(sizes):
+            for prompt_idx, prompt in enumerate(prompts):
+                out_idx = image_idx * prompt_count + prompt_idx
+                mode = mode_map[prompt]
+                confidence_threshold = confidence_map[prompt]
+
+                inst_score = torch.zeros(
+                    (height, width), device=device, dtype=torch.float32,
+                )
+                semantic_score = torch.zeros(
+                    (height, width), device=device, dtype=torch.float32,
+                )
+
+                if inst_masks is not None and inst_masks.shape[1] > 0:
+                    keep = logits[out_idx] > confidence_threshold
+                    if bool(keep.any()):
+                        inst = inst_masks[out_idx, keep].float()
+                        if inst.shape[-2:] != (height, width):
+                            inst = F.interpolate(
+                                inst.unsqueeze(1),
+                                size=(height, width),
+                                mode="bilinear",
+                                align_corners=False,
+                            ).squeeze(1)
+                        inst = inst.sigmoid()
+                        obj_scores = logits[out_idx, keep].view(-1, 1, 1)
+                        inst_score = (inst * obj_scores).max(dim=0).values
+
+                if semantic_masks is not None:
+                    semantic = semantic_masks[out_idx].float()
+                    if semantic.shape[-2:] != (height, width):
+                        semantic = F.interpolate(
+                            semantic.unsqueeze(0),
+                            size=(height, width),
+                            mode="bilinear",
+                            align_corners=False,
+                        ).squeeze(0)
+                    semantic_score = semantic.sigmoid().squeeze()
+
+                fused = _combine_score_branches(
+                    inst_score, semantic_score, mode,
+                )
+                fused = fused * presence[out_idx]
+                scores[prompt].append(fused.cpu().numpy().astype(np.float32))
+
+    return scores
+
+
+def _sam3_tiled_scores(
+    image,
+    prompts: list[str],
+    model_bundle: tuple,
+    device: str,
+    tile_size: int,
+    tile_stride: int,
+    batch_size: int,
+    mode_map: dict[str, str],
+    confidence_map: dict[str, float],
+) -> dict[str, np.ndarray]:
+    """Score prompts on a full image, sharing tile image encodes."""
+    width, height = image.size
+    if tile_size <= 0:
+        batched = _sam3_score_batch(
+            [image], prompts, model_bundle, device, mode_map, confidence_map,
+        )
+        return {prompt: scores[0] for prompt, scores in batched.items()}
+
+    xs = _tile_origins(width, tile_size, tile_stride)
+    ys = _tile_origins(height, tile_size, tile_stride)
+    acc = {
+        prompt: np.zeros((height, width), dtype=np.float32)
+        for prompt in prompts
+    }
+    cnt = np.zeros((height, width), dtype=np.float32)
+
+    tiles = [
+        (x, y, image.crop((
+            x, y, min(x + tile_size, width), min(y + tile_size, height),
+        )))
+        for y in ys
+        for x in xs
+    ]
+
+    tile_batch_size = max(1, int(batch_size) // max(1, len(prompts)))
+    for start in range(0, len(tiles), tile_batch_size):
+        batch = tiles[start:start + tile_batch_size]
+        scores_by_prompt = _sam3_score_batch(
+            [patch for _, _, patch in batch],
+            prompts,
+            model_bundle,
+            device,
+            mode_map,
+            confidence_map,
+        )
+        batch_weight = np.zeros((height, width), dtype=np.float32)
+        for tile_idx, (x, y, _) in enumerate(batch):
+            first_prompt = prompts[0]
+            ph, pw = scores_by_prompt[first_prompt][tile_idx].shape
+            wy = np.hanning(ph) if ph > 1 else np.ones(ph)
+            wx = np.hanning(pw) if pw > 1 else np.ones(pw)
+            win = np.outer(
+                np.maximum(wy, 0.08),
+                np.maximum(wx, 0.08),
+            ).astype(np.float32)
+            for prompt in prompts:
+                score = scores_by_prompt[prompt][tile_idx]
+                acc[prompt][y:y + ph, x:x + pw] += score * win
+            batch_weight[y:y + ph, x:x + pw] += win
+        cnt += batch_weight
+
+    return {
+        prompt: prompt_acc / np.maximum(cnt, 1e-6)
+        for prompt, prompt_acc in acc.items()
+    }
 
 
 def _resize_for_inference(img_rgb: np.ndarray, resize: int) -> tuple[np.ndarray, float]:
@@ -320,6 +612,33 @@ def _calculate_ratio(mask: np.ndarray) -> float:
     return float(np.sum(mask) / mask.size)
 
 
+def _apply_prompt_priority(
+    masks: dict[str, np.ndarray],
+    prompts: list[str],
+    image_hw: tuple[int, int],
+) -> dict[str, np.ndarray]:
+    """Apply prompt order as priority, returning every requested prompt."""
+    h, w = image_hw
+    prioritized: dict[str, np.ndarray] = {}
+    occupied = np.zeros((h, w), dtype=bool)
+    for prompt in prompts:
+        mask = masks.get(prompt)
+        if mask is None:
+            mask = np.zeros((h, w), dtype=bool)
+        else:
+            mask = mask.astype(bool)
+            if mask.shape != (h, w):
+                mask = cv2.resize(
+                    mask.astype(np.uint8),
+                    (w, h),
+                    interpolation=cv2.INTER_NEAREST,
+                ) > 0
+        visible = mask & ~occupied
+        prioritized[prompt] = visible
+        occupied |= visible
+    return prioritized
+
+
 def segment(
     profile: pd.DataFrame,
     prompts: Optional[list[str]] = None,
@@ -328,6 +647,15 @@ def segment(
     device: str = "auto",
     output_dir: Optional[str] = None,
     num_workers: int = 2,
+    checkpoint_path: Optional[str] = None,
+    mode: str | dict[str, str] | None = None,
+    tile_size: Optional[int] = None,
+    tile_stride: Optional[int] = None,
+    batch_size: int = 4,
+    threshold: float | dict[str, float] = 0.5,
+    confidence_threshold: float | dict[str, float] = 0.5,
+    save_scores: bool = False,
+    save_score_preview: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Run semantic segmentation on images using SAM3.
@@ -335,7 +663,7 @@ def segment(
     Args:
         profile: DataFrame with 'path' column containing image paths.
         prompts: List of text prompts for segmentation. Defaults to
-            ["fog", "cloud", "sky", "sun", "reflection"].
+            ["fog", "cloud", "sky", "sun", "reflection", "snow", "mountain"].
         colors: Optional dict mapping prompt -> BGR color tuple for preview.
             Auto-generated if not specified.
         resize: Target size for image resizing before segmentation.
@@ -345,15 +673,44 @@ def segment(
         output_dir: Optional directory to save segmentation outputs.
         num_workers: Number of DataLoader workers for I/O prefetching.
             Default is 2. Set to 0 to disable prefetching.
+        checkpoint_path: Optional path to a local SAM3 checkpoint (sam3.pt).
+            Falls back to the SAM3_CHECKPOINT_PATH env var, then to the
+            HuggingFace gated download.
+        mode: SAM3 output mode or per-prompt mapping. Supported modes are
+            ``"fused"``, ``"semantic_only"``, ``"instance_only"``, and
+            ``"instance"``. Defaults to ``"fused"`` for all prompts.
+        tile_size: Optional global tile size for score-map modes. Set to
+            ``None`` or ``0`` to score the whole image at once.
+        tile_stride: Optional global tile stride for score-map modes. When
+            omitted, defaults to ``tile_size``.
+        batch_size: Maximum number of image-prompt pairs to score together.
+        threshold: Score threshold or per-prompt thresholds for score-map
+            modes. Defaults to ``0.5``.
+        confidence_threshold: Instance confidence threshold used by
+            ``instance_only`` and ``fused`` score maps.
+        save_scores: Whether to persist raw score maps for score-map prompts.
+        save_score_preview: Whether to save score heatmap previews for
+            score-map prompts.
 
     Returns:
         tuple: (labels_df, masks_dict)
             - labels_df: DataFrame with columns 'path', 'prompt', 'ratio'
-              (long format, one row per path-prompt combination).
+              (long format, one row per path-prompt combination). Score-map
+              modes add columns such as ``mode`` and ``threshold``.
             - masks_dict: Dictionary mapping filepath to dict of prompt -> bool mask.
     """
     if prompts is None:
         prompts = DEFAULT_PROMPTS.copy()
+    if mode is None:
+        mode = DEFAULT_MODE
+    mode_map = _normalise_modes(prompts, mode)
+    threshold_map = _normalise_prompt_floats(prompts, threshold, default=0.5)
+    confidence_map = _normalise_prompt_floats(
+        prompts, confidence_threshold, default=0.5,
+    )
+    score_tile_size = int(tile_size or 0)
+    score_tile_stride = int(tile_stride or score_tile_size or 0)
+    score_batch_size = int(batch_size)
 
     # Generate colors for preview
     color_map = _generate_colors(prompts, colors)
@@ -363,8 +720,6 @@ def segment(
 
     resolved_device = _get_device(device)
     logger.info(f"Using device: {resolved_device}")
-
-    model_bundle = _load_models(resolved_device)
 
     # Strategy B: DataLoader for I/O prefetching
     filepaths = profile["path"].tolist()
@@ -387,8 +742,21 @@ def segment(
     masks_dict = {}
 
     from tqdm import tqdm
+    from PIL import Image
 
-    for filepath, img_bgr, resized_rgb, scale in tqdm(loader, desc="segment", total=len(dataset)):
+    model_bundle = _load_models(
+        resolved_device, checkpoint_path=checkpoint_path,
+    )
+    instance_prompts = [
+        prompt for prompt in prompts if mode_map[prompt] == "instance"
+    ]
+    score_prompts = [
+        prompt for prompt in prompts if mode_map[prompt] != "instance"
+    ]
+
+    for filepath, img_bgr, resized_rgb, scale in tqdm(
+        loader, desc="segment", total=len(dataset),
+    ):
         if img_bgr is None:
             logger.warning(f"Failed to read image: {filepath}")
             for prompt in prompts:
@@ -396,19 +764,70 @@ def segment(
                     "path": filepath,
                     "prompt": prompt,
                     "ratio": 0.0,
+                    "mode": mode_map[prompt],
                 })
             continue
 
-        mask_entry = _segment_single_image(
-            resized_rgb, img_bgr.shape[:2], prompts, model_bundle, scale
-        )
+        mask_entry: dict[str, np.ndarray] = {}
+        score_stats: dict[str, dict[str, float]] = {}
+
+        if instance_prompts:
+            mask_entry.update(_segment_single_image(
+                resized_rgb, img_bgr.shape[:2], instance_prompts,
+                model_bundle, scale,
+            ))
+
+        if score_prompts:
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(img_rgb)
+            score_maps = _sam3_tiled_scores(
+                pil_img,
+                score_prompts,
+                model_bundle,
+                resolved_device,
+                score_tile_size,
+                score_tile_stride,
+                score_batch_size,
+                mode_map,
+                confidence_map,
+            )
+            for prompt in score_prompts:
+                score = score_maps[prompt]
+                mask_entry[prompt] = score >= threshold_map[prompt]
+                score_stats[prompt] = {
+                    "threshold": threshold_map[prompt],
+                    "score_mean": float(score.mean()) if score.size else 0.0,
+                    "score_max": float(score.max()) if score.size else 0.0,
+                    "tile_size": float(score_tile_size),
+                    "tile_stride": float(score_tile_stride),
+                    "batch_size": float(score_batch_size),
+                }
+                if output_dir is not None:
+                    if save_scores:
+                        scores_dir = Path(output_dir) / "scores"
+                        scores_dir.mkdir(parents=True, exist_ok=True)
+                        np.savez_compressed(
+                            scores_dir
+                            / f"{Path(filepath).stem}_{prompt}_score.npz",
+                            score=score,
+                        )
+                    if save_score_preview:
+                        _save_score_preview(
+                            filepath, score, mask_entry[prompt],
+                            Path(output_dir) / "score_preview"
+                            / f"{Path(filepath).stem}_{prompt}_score.jpg",
+                        )
+
+        mask_entry = _apply_prompt_priority(mask_entry, prompts, img_bgr.shape[:2])
 
         for prompt in prompts:
-            ratio = _calculate_ratio(mask_entry[prompt])
+            stats = score_stats.get(prompt, {})
             labels_data.append({
                 "path": filepath,
                 "prompt": prompt,
-                "ratio": ratio,
+                "ratio": _calculate_ratio(mask_entry[prompt]),
+                "mode": mode_map[prompt],
+                **stats,
             })
 
         if output_dir is not None and save_executor is not None:
@@ -482,9 +901,12 @@ def _save_masks(
 
         # Create colored mask image
         colored = np.zeros((h, w, 3), dtype=np.uint8)
+        occupied = np.zeros((h, w), dtype=bool)
         for prompt, mask in masks.items():
             color = color_map.get(prompt, (0, 255, 0))
-            colored[mask] = color
+            visible = mask & ~occupied
+            colored[visible] = color
+            occupied |= mask
 
         # Concatenate horizontally
         combined = np.hstack([original_img, colored])
@@ -505,6 +927,35 @@ def _save_masks(
         preview_filename = f"{basename}_preview.jpg"
         preview_path = preview_dir / preview_filename
         cv2.imwrite(str(preview_path), combined)
+
+
+def _save_score_preview(
+    filepath: str,
+    score: np.ndarray,
+    mask: np.ndarray,
+    output_path: Path,
+) -> None:
+    """Save a diagnostic score heatmap preview for score-map tuning."""
+    img_bgr = cv2.imread(filepath)
+    if img_bgr is None:
+        return
+    norm = np.clip(score / max(float(score.max()), 1e-6), 0, 1)
+    heat = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+    overlay = img_bgr.copy()
+    overlay[mask] = (
+        0.45 * overlay[mask] + 0.55 * np.array([255, 255, 255])
+    ).astype(np.uint8)
+    combined = np.hstack([img_bgr, heat, overlay])
+    max_w = 2400
+    if combined.shape[1] > max_w:
+        scale = max_w / combined.shape[1]
+        combined = cv2.resize(
+            combined,
+            (max_w, int(combined.shape[0] * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(output_path), combined)
 
 
 def _add_legend(
